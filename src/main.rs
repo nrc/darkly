@@ -11,9 +11,10 @@
 // Should we return the result, rather than using this &mut bullshit? Then do the assignment in the macro?
 
 // TODO
-// delimited scanning
-// non-line-broken scanning
-// ctor functions - stdin, Path, file, string
+//   bug scan functions return a newline if that is the terminator
+//   macro
+//   delimited scanning
+//   non-line-broken scanning
 
 // References
 // https://doc.rust-lang.org/nightly/std/fmt/index.html
@@ -26,9 +27,6 @@ use std::io::{Read, BufReader, BufRead};
 use std::str::pattern::Pattern;
 use std::str::FromStr;
 
-// TODO Serde
-pub trait Deserialize {}
-
 pub trait Scanner {
     fn expect<'a, P: Pattern<'a>>(&'a mut self, p: P) -> Result<usize, String>;
 
@@ -36,23 +34,31 @@ pub trait Scanner {
     // Err case is always empty string
     fn next(&mut self) -> Result<char, String>;
 
-    // Reads until str is full or to break
+    // Reads until str is full or to break.
+    // It is undefined behaviour for `result` to overlap in memory with the data
+    // underlying the Scanner.
     fn scan_str(&mut self, result: &mut str) -> Result<usize, String>;
     fn scan_str_to<'a, P: Pattern<'a>>(&'a mut self, result: &mut str, next: P) -> Result<usize, String>;
 
-    // TODO these should return their results
-    fn scan<T: FromStr>(&mut self, result: &mut T) -> Result<usize, String>;
-    fn scan_to<'a, T: FromStr, P: Pattern<'a>>(&'a mut self, result: &mut T, next: P) -> Result<usize, String>;
+    fn scan<T: FromStr>(&mut self) -> Result<T, String>;
+    fn scan_to<'a, T: FromStr, P: Pattern<'a>>(&'a mut self, next: P) -> Result<T, String>;
 
-    // TODO these should return their results
-    fn scan_de<T: Deserialize>(&mut self, _result: &mut T) -> Result<usize, String> { unimplemented!(); }
-    fn scan_de_to<'a, T: Deserialize, P: Pattern<'a>>(&'a mut self, _result: &mut T, _next: P) -> Result<usize, String> { unimplemented!(); }
+    fn scan_de<T: Deserialize>(&mut self) -> Result<T, String> { unimplemented!(); }
+    fn scan_de_to<'a, T: Deserialize, P: Pattern<'a>>(&'a mut self, _next: P) -> Result<T, String> { unimplemented!(); }
 }
 
+pub fn str_scanner<'a>(input: &'a str) -> impl Scanner + 'a {
+    LineReadScanner::new(input.as_bytes())
+}
 
-// fn scan_from_serialiszed<T: ScanInput>(x: T)
-//     where <T as ScanInput>::Scannable: Deserialize
-// {}
+pub fn stdin_scanner<'a>() -> impl Scanner + 'a {
+    LineReadScanner::new(::std::io::stdin())
+}
+// TODO ctor functions - Path, file
+
+
+// TODO Serde
+pub trait Deserialize {}
 
 // Is not kept in a state of readiness - you must call advance_line to re-establish
 // invariants.
@@ -121,21 +127,14 @@ impl<R: Read> LineReadScanner<R> {
         }
     }
 
-    fn scan_internal<T: FromStr>(input: &str, result: &mut T) -> Result<usize, String> {
-        match FromStr::from_str(input) {
-            Ok(r) => {
-                *result = r;
-                Ok(input.len())
-            }
-            Err(_) => Err(input.to_owned())
-        }
+    fn scan_internal<T: FromStr>(input: &str) -> Result<T, String> {
+        FromStr::from_str(input).map_err(|_| input.to_owned())
     }
 }
 
 impl<R: Read> Scanner for LineReadScanner<R> {
     fn expect<'a, P: Pattern<'a>>(&'a mut self, p: P) -> Result<usize, String> {
         self.with_cur_line(|line, cur_pos| {
-            // TODO can we do this without allocating s?
             let rest = &line[*cur_pos..];
             if let Some((0, s)) = rest.match_indices(p).next() {
                 *cur_pos += s.len();
@@ -171,16 +170,10 @@ impl<R: Read> Scanner for LineReadScanner<R> {
 
     fn scan_str(&mut self, result: &mut str) -> Result<usize, String> {
         self.with_cur_line(|line, cur_pos| {
-            let end = min(*cur_pos + result.len(), line.len());
-            // TODO memcpy here? Or at least hoist the as_bytes
-            // TODO set length
-            unsafe {
-                let mres = ::std::mem::transmute::<&mut str, &mut [u8]>(result);
-                for i in *cur_pos..end {
-                    mres[i - *cur_pos] = line.as_bytes()[i];
-                }
-            }
-            *cur_pos = end;
+            let rest = &line[*cur_pos..];
+            let end = min(result.len(), rest.len());
+            copy_str(rest, result, end);
+            *cur_pos += end;
             Ok(result.len())
         })
     }
@@ -191,98 +184,109 @@ impl<R: Read> Scanner for LineReadScanner<R> {
             match rest.match_indices(next).next() {
                 Some((index, s)) => {
                     let end = min(result.len(), index);
-                    // TODO memcpy here? Or at least hoist the as_bytes
-                    // TODO set length
-                    unsafe {
-                        let mres = ::std::mem::transmute::<&mut str, &mut [u8]>(result);
-                        for i in 0..end {
-                            mres[i] = rest.as_bytes()[i];
-                        }
-                    }
+                    copy_str(rest, result, end);
                     *cur_pos += index + s.len();
-                    Ok(result.len())
                 }
                 None => {
                     let end = min(result.len(), rest.len());
-                    // TODO memcpy here? Or at least hoist the as_bytes
-                    // TODO set length
-                    unsafe {
-                        let mres = ::std::mem::transmute::<&mut str, &mut [u8]>(result);
-                        for i in 0..end {
-                            mres[i] = rest.as_bytes()[i];
-                        }
-                    }
+                    copy_str(rest, result, end);
                     *cur_pos = line.len();
-                    Ok(result.len())
                 }
             }
+            Ok(result.len())
         })        
     }
 
-    fn scan<T: FromStr>(&mut self, result: &mut T) -> Result<usize, String> {
+    fn scan<T: FromStr>(&mut self) -> Result<T, String> {
         let result = self.with_cur_line(|line, cur_pos| {
             let rest = &line[*cur_pos..];
-            LineReadScanner::<R>::scan_internal(rest, result)
+            LineReadScanner::<R>::scan_internal(rest)
         });
         self.cur_line = None;
         result
     }
 
-    fn scan_to<'a, T: FromStr, P: Pattern<'a>>(&'a mut self, result: &mut T, next: P) -> Result<usize, String> {
+    fn scan_to<'a, T: FromStr, P: Pattern<'a>>(&'a mut self, next: P) -> Result<T, String> {
         self.with_cur_line(|line, cur_pos| {
             let rest = &line[*cur_pos..];
             match rest.match_indices(next).next() {
                 Some((i, s)) => {
                     *cur_pos += i + s.len();
-                    LineReadScanner::<R>::scan_internal(&rest[..i], result)
+                    LineReadScanner::<R>::scan_internal(&rest[..i])
                 }
                 None => {
                     *cur_pos = line.len();
-                    LineReadScanner::<R>::scan_internal(rest, result)
+                    LineReadScanner::<R>::scan_internal(rest)
                 }
             }
         })
     }
 }
 
-pub fn str_scanner<'a>(input: &'a str) -> impl Scanner + 'a {
-    LineReadScanner::new(input.as_bytes())
+// `from` and `to` must not overlap.
+fn copy_str(from: &str, to: &mut str, count: usize) {
+    assert!(count <= to.len());
+    unsafe {
+        let mfrom = from.as_bytes().as_ptr();
+        let mto = ::std::mem::transmute::<&mut str, &mut [u8]>(to).as_mut_ptr();
+        ::std::ptr::copy_nonoverlapping(mfrom, mto, count);
+    }
 }
 
 fn main() {
+    let mut ss = stdin_scanner();
+    println!("You typed: `{}`", ss.scan().unwrap(): String);
+    println!("You typed: `{}`", ss.scan_to(",").unwrap(): String);
+}
 
-    // let mut ss = str_scanner("Hello, world!");
+#[cfg(test)]
+mod test {
+    use super::{str_scanner, Scanner};
 
-    // ss.expect("Hello").unwrap();
-    // ss.expect(',').unwrap();
-    // ss.expect(' ').unwrap();
-    // while ss.has_next() {
-    //     println!("{}", ss.next().unwrap());
-    // }
+    // TODO to test
+    // scan and scan_to with a few non-String types.
 
-    // let mut ss = str_scanner("Hello, world!");
+    #[test]
+    fn test_scan() {
+        let mut ss = str_scanner("Hello, world!");
+        assert!(ss.scan_to(",").unwrap(): String == "Hello");
+        assert!(ss.next().unwrap() == ' ');
+        assert!(ss.scan().unwrap(): String == "world!");
+    }
 
-    // ss.next().unwrap();
-    // ss.next().unwrap();
+    #[test]
+    fn test_TODO() {
+        let mut ss = str_scanner("Hello, world!");
+        assert!(ss.expect("Hello").unwrap() == 5);
+        ss.next().unwrap();
+        ss.next().unwrap();
+        // TODO match world?
+    }
 
-    // let mut s = "     ".to_owned();
-    // ss.scan_str(&mut s).unwrap();
-    // println!("`{}`", s);
-    // let mut s = String::new();
-    // ss.scan(&mut s).unwrap();
-    // println!("`{}`", s);
-    // assert!(!ss.has_next());
+    #[test]
+    fn test_scan_str() {
+        let mut ss = str_scanner("Hello, world!");
 
-    // let mut ss = str_scanner("Hello, world!");
-    // let mut s = String::new();
-    // ss.scan_to(&mut s, ",").unwrap();
-    // println!("`{}`", s);
-    // ss.next().unwrap();
-    // ss.scan(&mut s).unwrap();
-    // println!("`{}`", s);
+        assert!(ss.next().unwrap() == 'H');
+        assert!(ss.next().unwrap() == 'e');
 
-    // let mut ss = str_scanner("Hello, world!");
-    // assert!(ss.expect("Hello").unwrap() == 5);
-    // ss.next().unwrap();
-    // ss.next().unwrap();
+        let mut s = "     ".to_owned();
+        ss.scan_str(&mut s).unwrap();
+        assert!(s == "llo, ");
+
+        ss.scan_str_to(&mut s, "d").unwrap();
+        assert!(s == "worl ");
+        assert!(ss.next().is_ok());
+        assert!(!ss.has_next());
+    }
+
+    #[test]
+    fn test_expect() {
+        let mut ss = str_scanner("Hello, world!");
+
+        ss.expect("Hello").unwrap();
+        ss.expect(',').unwrap();
+        ss.expect(' ').unwrap();
+        assert!(ss.next() == Ok('w'));
+    }
 }
