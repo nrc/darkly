@@ -5,10 +5,7 @@
 #![feature(conservative_impl_trait)]
 
 // Questions
-// Strongly linked to char/String, should it be more generic? (Pattern is str based)
-// Could it be no-std?
 // Can we impl Iterator for Scanner
-// Should we return the result, rather than using this &mut bullshit? Then do the assignment in the macro?
 
 // TODO
 //   bug scan functions return a newline if that is the terminator
@@ -26,6 +23,9 @@ use std::cmp::min;
 use std::io::{Read, BufReader, BufRead};
 use std::str::pattern::Pattern;
 use std::str::FromStr;
+
+// TODO Serde
+pub trait Deserialize {}
 
 pub trait Scanner {
     fn expect<'a, P: Pattern<'a>>(&'a mut self, p: P) -> Result<usize, String>;
@@ -47,18 +47,23 @@ pub trait Scanner {
     fn scan_de_to<'a, T: Deserialize, P: Pattern<'a>>(&'a mut self, _next: P) -> Result<T, String> { unimplemented!(); }
 }
 
-pub fn str_scanner<'a>(input: &'a str) -> impl Scanner + 'a {
+pub fn scan_str<'a>(input: &'a str) -> impl Scanner + 'a {
     LineReadScanner::new(input.as_bytes())
 }
 
-pub fn stdin_scanner<'a>() -> impl Scanner + 'a {
+pub fn scan_stdin<'a>() -> impl Scanner + 'a {
     LineReadScanner::new(::std::io::stdin())
 }
-// TODO ctor functions - Path, file
 
+pub fn scan_file<'a>(input: &'a ::std::fs::File) -> impl Scanner + 'a {
+    LineReadScanner::new(input)
+}
 
-// TODO Serde
-pub trait Deserialize {}
+/// Panics if we can't open the file pointed to by path.
+pub fn scan_file_from_path(path: &::std::path::Path) -> impl Scanner {
+    LineReadScanner::new(::std::fs::File::open(path).unwrap())
+}
+
 
 // Is not kept in a state of readiness - you must call advance_line to re-establish
 // invariants.
@@ -234,9 +239,15 @@ fn copy_str(from: &str, to: &mut str, count: usize) {
 }
 
 fn main() {
-    let mut ss = stdin_scanner();
-    println!("You typed: `{}`", ss.scan().unwrap(): String);
-    println!("You typed: `{}`", ss.scan_to(",").unwrap(): String);
+    // let mut ss = scan_stdin();
+    // println!("You typed: `{}`", ss.scan().unwrap(): String);
+    // println!("You typed: `{}`", ss.scan_to(",").unwrap(): String);
+
+    // scanln!("Hello, {}!", s);
+    let mut ss = scan_stdin();
+    ss.expect("Hello, ").unwrap();
+    let s = ss.scan_to("!").unwrap();
+    println!("Good bye, {}!", s: String);
 }
 
 #[cfg(test)]
@@ -248,7 +259,7 @@ mod test {
 
     #[test]
     fn test_scan() {
-        let mut ss = str_scanner("Hello, world!");
+        let mut ss = scan_str("Hello, world!");
         assert!(ss.scan_to(",").unwrap(): String == "Hello");
         assert!(ss.next().unwrap() == ' ');
         assert!(ss.scan().unwrap(): String == "world!");
@@ -256,7 +267,7 @@ mod test {
 
     #[test]
     fn test_TODO() {
-        let mut ss = str_scanner("Hello, world!");
+        let mut ss = scan_str("Hello, world!");
         assert!(ss.expect("Hello").unwrap() == 5);
         ss.next().unwrap();
         ss.next().unwrap();
@@ -265,7 +276,7 @@ mod test {
 
     #[test]
     fn test_scan_str() {
-        let mut ss = str_scanner("Hello, world!");
+        let mut ss = scan_str("Hello, world!");
 
         assert!(ss.next().unwrap() == 'H');
         assert!(ss.next().unwrap() == 'e');
@@ -282,7 +293,7 @@ mod test {
 
     #[test]
     fn test_expect() {
-        let mut ss = str_scanner("Hello, world!");
+        let mut ss = scan_str("Hello, world!");
 
         ss.expect("Hello").unwrap();
         ss.expect(',').unwrap();
