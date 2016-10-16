@@ -238,17 +238,6 @@ fn copy_str(from: &str, to: &mut str, count: usize) {
     }
 }
 
-fn main() {
-    // let mut ss = scan_stdin();
-    // println!("You typed: `{}`", ss.scan().unwrap(): String);
-    // println!("You typed: `{}`", ss.scan_to(",").unwrap(): String);
-
-    // scanln!("Hello, {}!", s);
-    let mut ss = scan_stdin();
-    ss.expect("Hello, ").unwrap();
-    let s = ss.scan_to("!").unwrap();
-    println!("Good bye, {}!", s: String);
-}
 
 #[cfg(test)]
 mod test {
