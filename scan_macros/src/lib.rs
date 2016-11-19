@@ -1,25 +1,29 @@
-#![feature(question_mark)]
 #![feature(specialization)]
 #![feature(type_ascription)]
 #![feature(conservative_impl_trait)]
 #![feature(plugin, plugin_registrar, rustc_private)]
 #![crate_type = "dylib"]
 
-extern crate proc_macro_plugin;
+// TODO
+// if we ever fix specialization, we should be able to avoid the unwraps here
+// (and do it in the scanner?)
+
+#![plugin(proc_macro_plugin)]
+
+extern crate proc_macro_tokens;
 extern crate rustc_plugin;
 extern crate syntax;
 
-extern crate scan;
-
-use proc_macro_plugin::prelude::*;
-use syntax::ext::proc_macro_shim::prelude::*;
-
+use proc_macro_tokens::prelude::*;
 use rustc_plugin::Registry;
-use syntax::ext::base::SyntaxExtension;
-
 use syntax::ast;
+// note used by unquote or quote!, should be imported themselves
+use syntax::ast::Lit;
+use syntax::ext::proc_macro_shim::prelude::*;
+use syntax::ext::base::SyntaxExtension;
 use syntax::parse::{ParseSess, new_parser_from_tts};
 use syntax::parse::common::SeqSep;
+use syntax::parse::token::BinOpToken;
 use syntax::ptr::P;
 
 #[plugin_registrar]
@@ -31,8 +35,7 @@ pub fn plugin_registrar(reg: &mut Registry) {
 fn scanln(args: TokenStream) -> TokenStream {
     // note: shouldn't have to come up with these
     let sess = ParseSess::new();
-    let cfg = vec![];
-    let mut parser = new_parser_from_tts(&sess, cfg, args.to_tts());
+    let mut parser = new_parser_from_tts(&sess, args.to_tts());
     // note: nice parsing API?
     let expr_list = parser.parse_seq_to_before_end(&token::CloseDelim(token::Paren),
                                                    SeqSep::trailing_allowed(token::Comma),
@@ -41,9 +44,62 @@ fn scanln(args: TokenStream) -> TokenStream {
     assert!(!expr_list.is_empty(), "scanln requires at least a literal string argument");
 
     let chunks = process_lit_str(&expr_list[0]);
-
     let args = process_args(&expr_list[1..]);
-    lex("println!(\"Hello!\");")
+
+    assert!(args.len() == count_holes(&chunks), "Mismatched number of directives and arguments");
+
+    // Prelude
+    // extern crate scan;
+    // use scan::{scan_stdin, Scanner};
+    // let scanner = scan_stdin();
+
+    // note: can we make appending tokens easier?
+    let mut tokens = qquote!(extern crate scan;);
+    // note: should be extend/append, not functional concat
+    tokens = TokenStream::concat(tokens, qquote!(use scan::{scan_stdin, Scanner};));
+    // TODO note - qquote can't seem to handle empty parens
+    let t2 = qquote!(let scanner = scan_stdin;);
+    tokens = TokenStream::concat(tokens, t2);
+
+    let mut hole_count = 0;
+    for c in chunks {
+        match c {
+            Chunk::Text(ref s) => {
+                // TODO - string literals in tokens
+                // scanner.expect("$s").unwrap_or_else(|e| panic!("Error in scanln: expected `$s`, found `{}`", e));
+                //tokens = TokenStream::concat(tokens, qquote!(scanner.expect("unquote s").unwrap_or_else(|e| panic!("Error in scanln: expected `unquote s`, found `{}`", e));));
+            }
+            Chunk::Directive(DirKind::Hole) => {
+                // TODO
+                // TODO scan or scan_to depending on if there is a text chunk next
+                match args[hole_count] {
+                    Arg::Ident(ref ident) => {
+                        // note easier way to use idents, etc.
+                        // single token, unquote without making tokens stream
+                        let ident = TokenStream::from_tokens(vec![token::Ident(*ident)]);
+                        // let $ident = scanner.scan().unwrap_or_else(|e| panic!("Error in scanln: expected value for `$ident`, found `{}`", e));
+                        // note: would be nice to have $foo instead of unquote foo, unquote(foo) should work but gives warning
+                        // TODO scan => scan()
+                        // TODO causing an error abount Str_?
+                        tokens = TokenStream::concat(tokens, qquote!(let unquote ident  = scanner.scan.unwrap_or_else(|e| panic!("Error in scanln: expected value for `unquote ident`, found `{}`", e));));
+                    }
+                    Arg::Typed(ref ident, ref ty) => {
+                        let ident = TokenStream::from_tokens(vec![token::Ident(*ident)]);
+                        // TODO need to convert ast::Ty to tokens
+                        let ty = TokenStream::from_tokens(panic!());
+                        // let $ident: $ty = scanner.scan().unwrap_or_else(|e| panic!("Error in scanln: expected `$ty`, found `{}`", e));
+                        tokens = TokenStream::concat(tokens, qquote!(let unquote ident: unquote ty = scanner.scan().unwrap_or_else(|e| panic!("Error in scanln: expected `unquote ty`, found `{}`", e));));
+                    }
+                }
+
+                hole_count += 1;
+            }
+            Chunk::Directive(DirKind::DebugHole) => unimplemented!(),
+        }
+    }
+
+    // TODO wrap in block
+    tokens
 }
 
 #[derive(Eq, PartialEq, Debug, Clone)]
@@ -60,6 +116,12 @@ enum DirKind {
     DebugHole,
 }
 
+#[derive(Debug, Clone)]
+enum Arg {
+    Ident(ast::Ident),
+    Typed(ast::Ident, ast::Ty),
+}
+
 fn process_lit_str(expr: &ast::Expr) -> Vec<Chunk> {
     if let ast::ExprKind::Lit(ref l) = expr.node {
         if let ast::LitKind::Str(ref s, ast::StrStyle::Cooked) = l.node {
@@ -68,8 +130,13 @@ fn process_lit_str(expr: &ast::Expr) -> Vec<Chunk> {
     }
 
     // TODO use pretty printing rather than Debug
-    // Note error reporting with spans
+    // Note: error reporting with spans
     panic!("Expected string literal, found: `{:?}`", expr);
+}
+
+fn count_holes(chunks: &[Chunk]) -> usize {
+    chunks.iter().filter(|c| if let &Chunk::Directive(_) = *c { true } else { false }).count()
+
 }
 
 fn tokenise_format_str(s: &str) -> Vec<Chunk> {
@@ -189,11 +256,6 @@ fn process_args(exprs: &[P<ast::Expr>]) -> Vec<Arg> {
             _ => panic!("Expected identifier or type ascribed identifier, found: `{:?}`", e.node),
         }
     }).collect()
-}
-
-enum Arg {
-    Ident(ast::Ident),
-    Typed(ast::Ident, ast::Ty),
 }
 
 #[cfg(test)]
