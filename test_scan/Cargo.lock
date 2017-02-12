@@ -1,0 +1,19 @@
+[root]
+name = "test_scan"
+version = "0.1.0"
+dependencies = [
+ "scan 0.1.0",
+ "scan_macros 0.1.0",
+]
+
+[[package]]
+name = "scan"
+version = "0.1.0"
+
+[[package]]
+name = "scan_macros"
+version = "0.1.0"
+dependencies = [
+ "scan 0.1.0",
+]
+

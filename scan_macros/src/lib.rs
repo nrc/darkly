@@ -10,96 +10,108 @@
 
 #![plugin(proc_macro_plugin)]
 
-extern crate proc_macro_tokens;
+extern crate proc_macro;
 extern crate rustc_plugin;
 extern crate syntax;
+extern crate syntax_pos;
 
-use proc_macro_tokens::prelude::*;
+use syntax::tokenstream::{TokenStream, TokenTree};
 use rustc_plugin::Registry;
 use syntax::ast;
-// note used by unquote or quote!, should be imported themselves
-use syntax::ast::Lit;
-use syntax::ext::proc_macro_shim::prelude::*;
-use syntax::ext::base::SyntaxExtension;
-use syntax::parse::{ParseSess, new_parser_from_tts};
+use syntax::ext::base::{SyntaxExtension, ProcMacro, ExtCtxt};
 use syntax::parse::common::SeqSep;
-use syntax::parse::token::BinOpToken;
+use syntax::parse::token::{self, BinOpToken};
+use syntax::symbol::Symbol;
 use syntax::ptr::P;
+use syntax_pos::{Span, DUMMY_SP};
 
 #[plugin_registrar]
 pub fn plugin_registrar(reg: &mut Registry) {
-    reg.register_syntax_extension(token::intern("scanln"),
-                                  SyntaxExtension::ProcMacro(Box::new(scanln)));
+    reg.register_syntax_extension(Symbol::intern("scanln"),
+                                  SyntaxExtension::ProcMacro(Box::new(ScanLn)));
 }
 
-fn scanln(args: TokenStream) -> TokenStream {
-    // note: shouldn't have to come up with these
-    let sess = ParseSess::new();
-    let mut parser = new_parser_from_tts(&sess, args.to_tts());
-    // note: nice parsing API?
-    let expr_list = parser.parse_seq_to_before_end(&token::CloseDelim(token::Paren),
-                                                   SeqSep::trailing_allowed(token::Comma),
-                                                   |p| Ok(p.parse_expr()?));
-    // note: error reporting
-    assert!(!expr_list.is_empty(), "scanln requires at least a literal string argument");
-
-    let chunks = process_lit_str(&expr_list[0]);
-    let args = process_args(&expr_list[1..]);
-
-    assert!(args.len() == count_holes(&chunks), "Mismatched number of directives and arguments");
-
-    // Prelude
-    // extern crate scan;
-    // use scan::{scan_stdin, Scanner};
-    // let scanner = scan_stdin();
-
-    // note: can we make appending tokens easier?
-    let mut tokens = qquote!(extern crate scan;);
-    // note: should be extend/append, not functional concat
-    tokens = TokenStream::concat(tokens, qquote!(use scan::{scan_stdin, Scanner};));
-    // TODO note - qquote can't seem to handle empty parens
-    let t2 = qquote!(let scanner = scan_stdin;);
-    tokens = TokenStream::concat(tokens, t2);
-
-    let mut hole_count = 0;
-    for c in chunks {
-        match c {
-            Chunk::Text(ref s) => {
-                // TODO - string literals in tokens
-                // scanner.expect("$s").unwrap_or_else(|e| panic!("Error in scanln: expected `$s`, found `{}`", e));
-                //tokens = TokenStream::concat(tokens, qquote!(scanner.expect("unquote s").unwrap_or_else(|e| panic!("Error in scanln: expected `unquote s`, found `{}`", e));));
-            }
-            Chunk::Directive(DirKind::Hole) => {
-                // TODO
-                // TODO scan or scan_to depending on if there is a text chunk next
-                match args[hole_count] {
-                    Arg::Ident(ref ident) => {
-                        // note easier way to use idents, etc.
-                        // single token, unquote without making tokens stream
-                        let ident = TokenStream::from_tokens(vec![token::Ident(*ident)]);
-                        // let $ident = scanner.scan().unwrap_or_else(|e| panic!("Error in scanln: expected value for `$ident`, found `{}`", e));
-                        // note: would be nice to have $foo instead of unquote foo, unquote(foo) should work but gives warning
-                        // TODO scan => scan()
-                        // TODO causing an error abount Str_?
-                        tokens = TokenStream::concat(tokens, qquote!(let unquote ident  = scanner.scan.unwrap_or_else(|e| panic!("Error in scanln: expected value for `unquote ident`, found `{}`", e));));
-                    }
-                    Arg::Typed(ref ident, ref ty) => {
-                        let ident = TokenStream::from_tokens(vec![token::Ident(*ident)]);
-                        // TODO need to convert ast::Ty to tokens
-                        let ty = TokenStream::from_tokens(panic!());
-                        // let $ident: $ty = scanner.scan().unwrap_or_else(|e| panic!("Error in scanln: expected `$ty`, found `{}`", e));
-                        tokens = TokenStream::concat(tokens, qquote!(let unquote ident: unquote ty = scanner.scan().unwrap_or_else(|e| panic!("Error in scanln: expected `unquote ty`, found `{}`", e));));
-                    }
-                }
-
-                hole_count += 1;
-            }
-            Chunk::Directive(DirKind::DebugHole) => unimplemented!(),
-        }
+impl ProcMacro for ScanLn {
+    fn expand<'cx>(&self,
+                   ecx: &'cx mut ExtCtxt,
+                   _span: Span,
+                   ts: TokenStream)
+                   -> TokenStream {
+        self.expand(ts, ecx)
     }
+}
 
-    // TODO wrap in block
-    tokens
+struct ScanLn;
+
+impl ScanLn {
+    fn expand(&self, args: TokenStream, cx: &mut ExtCtxt) -> TokenStream {
+        // note: nice parsing API?
+        let mut parser = cx.new_parser_from_tts(&args.trees().cloned().collect::<Vec<_>>());
+        let expr_list = parser.parse_seq_to_before_end(&token::Eof,
+                                                       SeqSep::trailing_allowed(token::Comma),
+                                                       |p| Ok(p.parse_expr()?));
+        // note: error reporting
+        assert!(!expr_list.is_empty(), "scanln requires at least a literal string argument");
+
+        let chunks = process_lit_str(&expr_list[0]);
+        let args = process_args(&expr_list[1..]);
+
+        assert!(args.len() == count_holes(&chunks), "Mismatched number of directives and arguments");
+
+        // Prelude
+        // extern crate scan;
+        // use scan::{scan_stdin, Scanner};
+        // let scanner = scan_stdin();
+
+        // note: can we make appending tokens easier?
+        // note: this requires the user have scan in their Cargo.toml
+        let extern_crate = qquote!(extern crate scan;);
+        // note: should be extend/append, not functional concat
+        let imports = qquote!(use scan::{scan_stdin, Scanner};);
+        let decl = qquote!(let mut scanner = scan_stdin(););
+
+        let mut program = vec![extern_crate, imports, decl];
+
+        let mut hole_count = 0;
+        for c in chunks {
+            match c {
+                Chunk::Text(ref s) => {
+                    // TODO note - need to be able to unquote inside string literals
+                    // scanner.expect("$s").unwrap_or_else(|e| panic!("Error in scanln: expected `$s`, found `{}`", e));
+                    program.push(qquote!(scanner.expect("unquote s").unwrap_or_else(|e| panic!("Error in scanln: expected `unquote s`, found `{}`", e));));
+                }
+                Chunk::Directive(DirKind::Hole) => {
+                    // TODO scan or scan_to depending on if there is a text chunk next
+                    match args[hole_count] {
+                        Arg::Ident(ref ident) => {
+                            // note easier way to use idents, etc.
+                            // single token, unquote without making tokens stream
+                            let ident = TokenStream::from(TokenTree::Token(DUMMY_SP, token::Ident(*ident)));
+                            let ident2 = ident.clone();
+                            let ident3 = ident.clone();
+                            // note: would be nice to have $foo instead of unquote foo, unquote(foo) should work but gives warning
+                            // let $ident = scanner.scan().unwrap_or_else(|e| panic!("Error in scanln: expected value for `$ident`, found `{}`", e));
+                            program.push(qquote!(let unquote ident: Result<_, String> = scanner.scan();));
+                            program.push(qquote!(let unquote ident2 = unquote ident3.unwrap_or_else(|e| panic!("Error in scanln: expected value for `unquote ident`, found `{}`", e));));
+                        }
+                        Arg::Typed(ref ident, ref ty) => {
+                            // let ident = TokenStream::from_tokens(vec![token::Ident(*ident)]);
+                            // // TODO need to convert ast::Ty to tokens
+                            // let ty = TokenStream::from_tokens(panic!());
+                            // // let $ident: $ty = scanner.scan().unwrap_or_else(|e| panic!("Error in scanln: expected `$ty`, found `{}`", e));
+                            // tokens = TokenStream::concat(tokens, qquote!(let unquote ident: unquote ty = scanner.scan().unwrap_or_else(|e| panic!("Error in scanln: expected `unquote ty`, found `{}`", e));));
+                        }
+                    }
+
+                    hole_count += 1;
+                }
+                Chunk::Directive(DirKind::DebugHole) => unimplemented!(),
+            }
+        }
+
+        // TODO wrap in block
+        program.into_iter().collect()
+    }
 }
 
 #[derive(Eq, PartialEq, Debug, Clone)]
@@ -125,7 +137,7 @@ enum Arg {
 fn process_lit_str(expr: &ast::Expr) -> Vec<Chunk> {
     if let ast::ExprKind::Lit(ref l) = expr.node {
         if let ast::LitKind::Str(ref s, ast::StrStyle::Cooked) = l.node {
-            return tokenise_format_str(s);
+            return tokenise_format_str(&s.as_str());
         }
     }
 
@@ -235,7 +247,7 @@ fn process_args(exprs: &[P<ast::Expr>]) -> Vec<Arg> {
     exprs.iter().map(|e| {
         match e.node {
             ast::ExprKind::Path(None, ref p) => {
-                if p.segments.len() != 1 || !p.segments[0].parameters.is_empty() {
+                if p.segments.len() != 1 || p.segments[0].parameters.is_some() {
                     panic!("Expected identifier, found path: {:?}", p);
                 }
 
@@ -243,7 +255,7 @@ fn process_args(exprs: &[P<ast::Expr>]) -> Vec<Arg> {
             }
             ast::ExprKind::Type(ref e, ref t) => {
                 if let ast::ExprKind::Path(None, ref p) = e.node {
-                    if p.segments.len() != 1 || !p.segments[0].parameters.is_empty() {
+                    if p.segments.len() != 1 || p.segments[0].parameters.is_some() {
                         panic!("Expected identifier, found path: {:?}", p);
                     }
                     Arg::Typed(p.segments[0].identifier.clone(), (**t).clone())

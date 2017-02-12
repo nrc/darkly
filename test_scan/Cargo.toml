@@ -1,10 +1,8 @@
 [package]
-name = "scan_macros"
+name = "test_scan"
 version = "0.1.0"
 authors = ["Nick Cameron <ncameron@mozilla.com>"]
 
-[lib]
-plugin = true
-
 [dependencies]
 scan = { path = "../scan" }
+scan_macros = { path = "../scan_macros" }
