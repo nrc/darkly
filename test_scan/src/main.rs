@@ -6,8 +6,8 @@
 extern crate scan;
 
 fn main() {
-    scanln!("hello {}", x);
-    let x = x: String;
+    scanln!("hello {}", x: u32);
+    //let x = x: String;
     println!("you entered `{}`", x);
-    assert!(x == "foo".to_owned());
+    assert!(x == 42);
 }

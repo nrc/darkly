@@ -15,15 +15,17 @@ extern crate rustc_plugin;
 extern crate syntax;
 extern crate syntax_pos;
 
-use syntax::tokenstream::{TokenStream, TokenTree};
 use rustc_plugin::Registry;
 use syntax::ast;
 use syntax::ext::base::{SyntaxExtension, ProcMacro, ExtCtxt};
+use syntax::parse::filemap_to_stream;
 use syntax::parse::common::SeqSep;
-use syntax::parse::token::{self, BinOpToken, Token, Lit};
-use syntax::symbol::Symbol;
+use syntax::parse::token::{self, Token, Lit};
+use syntax::print::pprust;
 use syntax::ptr::P;
-use syntax_pos::{Span, DUMMY_SP};
+use syntax::symbol::Symbol;
+use syntax::tokenstream::TokenStream;
+use syntax_pos::Span;
 
 #[plugin_registrar]
 pub fn plugin_registrar(reg: &mut Registry) {
@@ -85,21 +87,29 @@ impl ScanLn {
                     match args[hole_count] {
                         Arg::Ident(ref ident) => {
                             // note easier way to use idents?
-                            // note get around cloning?
+                            // note get around cloning? - quote! should take by referece
                             let ident1 = token::Ident(*ident);
                             let ident2 = ident1.clone();
                             let ident3 = ident1.clone();
                             // let $ident = scanner.scan().unwrap_or_else(|e| panic!("Error in scanln: expected value for `$ident`, found `{}`", e));
                             program.push(quote!(let $ident1: Result<_, String> = scanner.scan();));
-                            let panic_msg = Token::Literal(Lit::Str_(Symbol::intern(&format!("Error in scanln: expected `{}`, found `{{}}`", ident))), None);
+                            // note: should be simpler
+                            let panic_msg = Token::Literal(Lit::Str_(Symbol::intern(&format!("Error in scanln: expected value for `{}`, found `{{}}`", ident))), None);
                             program.push(quote!(let $ident2 = $ident3.unwrap_or_else(|e| panic!($panic_msg, e));));
                         }
                         Arg::Typed(ref ident, ref ty) => {
-                            // let ident = TokenStream::from_tokens(vec![token::Ident(*ident)]);
-                            // // TODO need to convert ast::Ty to tokens
-                            // let ty = TokenStream::from_tokens(panic!());
-                            // // let $ident: $ty = scanner.scan().unwrap_or_else(|e| panic!("Error in scanln: expected `$ty`, found `{}`", e));
-                            // tokens = TokenStream::concat(tokens, quote!(let unquote ident: unquote ty = scanner.scan().unwrap_or_else(|e| panic!("Error in scanln: expected `unquote ty`, found `{}`", e));));
+                            let ident1 = token::Ident(*ident);
+                            let ident2 = ident1.clone();
+                            let ident3 = ident1.clone();
+                            // note: would be nice for the user not to know about parse_sess, etc, and for this to be easy
+                            let ty_str = pprust::ty_to_string(ty);
+                            let ty1 = filemap_to_stream(cx.parse_sess, cx.parse_sess.codemap().new_filemap("<darkly input>".to_owned(), None, ty_str.clone()));
+                            let ty2 = ty1.clone();
+                            // let $ident: $ty = scanner.scan().unwrap_or_else(|e| panic!("Error in scanln: expected `$ty`, found `{}`", e));
+                            program.push(quote!(let $ident1: Result<$ty1, String> = scanner.scan();));
+                            // note: easy pretty printing of simple stuff?
+                            let panic_msg = Token::Literal(Lit::Str_(Symbol::intern(&format!("Error in scanln: expected `{}`, found `{{}}`", ty_str))), None);
+                            program.push(quote!(let $ident2: $ty2 = $ident3.unwrap_or_else(|e| panic!($panic_msg, e));));
                         }
                     }
 
@@ -109,7 +119,10 @@ impl ScanLn {
             }
         }
 
-        // TODO wrap in block
+        // TODO think about scoping - can't be in a block because are declaring variables, but don't want the extern crate/use/temp decls to escape
+        // let program: TokenStream = program.into_iter().collect();
+        // quote!({ $program })
+
         program.into_iter().collect()
     }
 }
