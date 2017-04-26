@@ -272,7 +272,8 @@ fn process_args(exprs: &[P<ast::Expr>]) -> Vec<Arg> {
 
 #[cfg(test)]
 mod tests {
-    use scan::*;
+    extern crate scan;
+    use self::scan::*;
     use super::{tokenise_format_str, DirKind, Chunk};
 
     #[test]

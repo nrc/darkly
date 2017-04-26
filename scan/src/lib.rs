@@ -7,7 +7,6 @@
 // Can we impl Iterator for Scanner
 
 // TODO
-//   bug scan functions return a newline if that is the terminator
 //   macro
 //   delimited scanning
 //   non-line-broken scanning
@@ -69,6 +68,7 @@ pub fn scan_file_from_path(path: &::std::path::Path) -> impl Scanner {
 // Invariants:
 // cur_line.is_some() => cur_pos < cur_line.unwrap().len()
 // cur_line.is_some() <=> data to read
+// cur_line does not include the terminating newline
 pub struct LineReadScanner<R: Read> {
     reader: BufReader<R>,
     cur_line: Option<String>,
@@ -88,29 +88,23 @@ impl<R: Read> LineReadScanner<R> {
         let mut s = String::new();
         match self.reader.read_line(&mut s) {
             Ok(n) if n == 0 => self.cur_line = None,
-            Ok(_) => self.cur_line = Some(s),
             Err(_) => self.cur_line = None,
+            Ok(_) => {
+                assert!(&s[s.len() - 1..] == "\n");
+                self.cur_line = Some(s[..s.len() - 1].to_owned());
+            }
         }
         self.cur_pos = 0;
     }
 
-    // Assures that we are in a cononical state, i.e., either we can read, or
+    // Assures that we are in a canonical state, i.e., either we can read, or
     // self.cur_line.is_none();
     fn advance_line(&mut self) {
-        let mut needs_read = true;
         loop {
             if let Some(ref line) = self.cur_line {
-                // -1 because we don't want to read the newline delimiter.
-                if self.cur_pos < line.len() - 1 {
-                    needs_read = false;
+                if self.cur_pos < line.len() {
+                    break;
                 }
-                if self.cur_pos == line.len() - 1 && line.as_bytes()[line.len() - 1] != 0xA {
-                    needs_read = false;
-                }
-            }
-
-            if !needs_read {
-                break;
             }
 
             self.read_line();
