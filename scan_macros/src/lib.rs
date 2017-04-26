@@ -20,7 +20,7 @@ use rustc_plugin::Registry;
 use syntax::ast;
 use syntax::ext::base::{SyntaxExtension, ProcMacro, ExtCtxt};
 use syntax::parse::common::SeqSep;
-use syntax::parse::token::{self, BinOpToken};
+use syntax::parse::token::{self, BinOpToken, Token, Lit};
 use syntax::symbol::Symbol;
 use syntax::ptr::P;
 use syntax_pos::{Span, DUMMY_SP};
@@ -46,7 +46,7 @@ struct ScanLn;
 impl ScanLn {
     fn expand(&self, args: TokenStream, cx: &mut ExtCtxt) -> TokenStream {
         // note: nice parsing API?
-        let mut parser = cx.new_parser_from_tts(&args.trees().cloned().collect::<Vec<_>>());
+        let mut parser = cx.new_parser_from_tts(&args.trees().collect::<Vec<_>>());
         let expr_list = parser.parse_seq_to_before_end(&token::Eof,
                                                        SeqSep::trailing_allowed(token::Comma),
                                                        |p| Ok(p.parse_expr()?));
@@ -59,16 +59,15 @@ impl ScanLn {
         assert!(args.len() == count_holes(&chunks), "Mismatched number of directives and arguments");
 
         // Prelude
-        // extern crate scan;
-        // use scan::{scan_stdin, Scanner};
-        // let scanner = scan_stdin();
+        // `extern crate scan;`
+        // `use scan::{scan_stdin, Scanner};`
+        // `let scanner = scan_stdin();`
 
-        // note: can we make appending tokens easier?
         // note: this requires the user have scan in their Cargo.toml
-        let extern_crate = qquote!(extern crate scan;);
+        let extern_crate = quote!(extern crate scan;);
         // note: should be extend/append, not functional concat
-        let imports = qquote!(use scan::{scan_stdin, Scanner};);
-        let decl = qquote!(let mut scanner = scan_stdin(););
+        let imports = quote!(use scan::{scan_stdin, Scanner};);
+        let decl = quote!(let mut scanner = scan_stdin(););
 
         let mut program = vec![extern_crate, imports, decl];
 
@@ -76,30 +75,31 @@ impl ScanLn {
         for c in chunks {
             match c {
                 Chunk::Text(ref s) => {
-                    // TODO note - need to be able to unquote inside string literals
                     // scanner.expect("$s").unwrap_or_else(|e| panic!("Error in scanln: expected `$s`, found `{}`", e));
-                    program.push(qquote!(scanner.expect("unquote s").unwrap_or_else(|e| panic!("Error in scanln: expected `unquote s`, found `{}`", e));));
+                    let expect_msg = Token::Literal(Lit::Str_(Symbol::intern(s)), None);
+                    let panic_msg = Token::Literal(Lit::Str_(Symbol::intern(&format!("Error in scanln: expected `{}`, found `{{}}`", s))), None);
+                    program.push(quote!(scanner.expect($expect_msg).unwrap_or_else(|e| panic!($panic_msg, e));));
                 }
                 Chunk::Directive(DirKind::Hole) => {
                     // TODO scan or scan_to depending on if there is a text chunk next
                     match args[hole_count] {
                         Arg::Ident(ref ident) => {
-                            // note easier way to use idents, etc.
-                            // single token, unquote without making tokens stream
-                            let ident = TokenStream::from(TokenTree::Token(DUMMY_SP, token::Ident(*ident)));
-                            let ident2 = ident.clone();
-                            let ident3 = ident.clone();
-                            // note: would be nice to have $foo instead of unquote foo, unquote(foo) should work but gives warning
+                            // note easier way to use idents?
+                            // note get around cloning?
+                            let ident1 = token::Ident(*ident);
+                            let ident2 = ident1.clone();
+                            let ident3 = ident1.clone();
                             // let $ident = scanner.scan().unwrap_or_else(|e| panic!("Error in scanln: expected value for `$ident`, found `{}`", e));
-                            program.push(qquote!(let unquote ident: Result<_, String> = scanner.scan();));
-                            program.push(qquote!(let unquote ident2 = unquote ident3.unwrap_or_else(|e| panic!("Error in scanln: expected value for `unquote ident`, found `{}`", e));));
+                            program.push(quote!(let $ident1: Result<_, String> = scanner.scan();));
+                            let panic_msg = Token::Literal(Lit::Str_(Symbol::intern(&format!("Error in scanln: expected `{}`, found `{{}}`", ident))), None);
+                            program.push(quote!(let $ident2 = $ident3.unwrap_or_else(|e| panic!($panic_msg, e));));
                         }
                         Arg::Typed(ref ident, ref ty) => {
                             // let ident = TokenStream::from_tokens(vec![token::Ident(*ident)]);
                             // // TODO need to convert ast::Ty to tokens
                             // let ty = TokenStream::from_tokens(panic!());
                             // // let $ident: $ty = scanner.scan().unwrap_or_else(|e| panic!("Error in scanln: expected `$ty`, found `{}`", e));
-                            // tokens = TokenStream::concat(tokens, qquote!(let unquote ident: unquote ty = scanner.scan().unwrap_or_else(|e| panic!("Error in scanln: expected `unquote ty`, found `{}`", e));));
+                            // tokens = TokenStream::concat(tokens, quote!(let unquote ident: unquote ty = scanner.scan().unwrap_or_else(|e| panic!("Error in scanln: expected `unquote ty`, found `{}`", e));));
                         }
                     }
 
