@@ -74,7 +74,8 @@ impl ScanLn {
         let mut program = vec![extern_crate, imports, decl];
 
         let mut hole_count = 0;
-        for c in chunks {
+        let mut chunks = chunks.into_iter().peekable();
+        while let Some(c) = chunks.next() {
             match c {
                 Chunk::Text(ref s) => {
                     // scanner.expect("$s").unwrap_or_else(|e| panic!("Error in scanln: expected `$s`, found `{}`", e));
@@ -83,7 +84,10 @@ impl ScanLn {
                     program.push(quote!(scanner.expect($expect_msg).unwrap_or_else(|e| panic!($panic_msg, e));));
                 }
                 Chunk::Directive(DirKind::Hole) => {
-                    // TODO scan or scan_to depending on if there is a text chunk next
+                    let next = chunks.peek().and_then(|n| match *n {
+                        Chunk::Text(_) => Some(()),
+                        Chunk::Directive(_) => None,
+                    });
                     match args[hole_count] {
                         Arg::Ident(ref ident) => {
                             // note easier way to use idents?
@@ -91,11 +95,24 @@ impl ScanLn {
                             let ident1 = token::Ident(*ident);
                             let ident2 = ident1.clone();
                             let ident3 = ident1.clone();
-                            // let $ident = scanner.scan().unwrap_or_else(|e| panic!("Error in scanln: expected value for `$ident`, found `{}`", e));
-                            program.push(quote!(let $ident1: Result<_, String> = scanner.scan();));
-                            // note: should be simpler
-                            let panic_msg = Token::Literal(Lit::Str_(Symbol::intern(&format!("Error in scanln: expected value for `{}`, found `{{}}`", ident))), None);
-                            program.push(quote!(let $ident2 = $ident3.unwrap_or_else(|e| panic!($panic_msg, e));));
+
+                            match next {
+                                // let $ident = scanner.scan().unwrap_or_else(|e| panic!("Error in scanln: expected value for `$ident`, found `{}`", e));
+                                None => {
+                                    program.push(quote!(let $ident1: Result<_, String> = scanner.scan();));
+                                    // note: should be simpler
+                                    let panic_msg = Token::Literal(Lit::Str_(Symbol::intern(&format!("Error in scanln: expected value for `{}`, found `{{}}`", ident))), None);
+                                    program.push(quote!(let $ident2 = $ident3.unwrap_or_else(|e| panic!($panic_msg, e));));
+                                }
+                                // let $ident = scanner.scan_to($t).unwrap_or_else(|e| panic!("Error in scanln: expected value for `$ident`, then `$t`, found `{}`", e));
+                                Some(_) => {
+                                    let t = chunks.next().unwrap().expect_text();
+                                    let text = Token::Literal(Lit::Str_(Symbol::intern(&t)), None);
+                                    program.push(quote!(let $ident1: Result<_, String> = scanner.scan_to($text);));
+                                    let panic_msg = Token::Literal(Lit::Str_(Symbol::intern(&format!("Error in scanln: expected value for `{}`, then `{}`, found `{{}}`", ident, t))), None);
+                                    program.push(quote!(let $ident2 = $ident3.unwrap_or_else(|e| panic!($panic_msg, e));));
+                                }
+                            }
                         }
                         Arg::Typed(ref ident, ref ty) => {
                             let ident1 = token::Ident(*ident);
@@ -105,11 +122,25 @@ impl ScanLn {
                             let ty_str = pprust::ty_to_string(ty);
                             let ty1 = filemap_to_stream(cx.parse_sess, cx.parse_sess.codemap().new_filemap("<darkly input>".to_owned(), None, ty_str.clone()));
                             let ty2 = ty1.clone();
-                            // let $ident: $ty = scanner.scan().unwrap_or_else(|e| panic!("Error in scanln: expected `$ty`, found `{}`", e));
-                            program.push(quote!(let $ident1: Result<$ty1, String> = scanner.scan();));
-                            // note: easy pretty printing of simple stuff?
-                            let panic_msg = Token::Literal(Lit::Str_(Symbol::intern(&format!("Error in scanln: expected `{}`, found `{{}}`", ty_str))), None);
-                            program.push(quote!(let $ident2: $ty2 = $ident3.unwrap_or_else(|e| panic!($panic_msg, e));));
+
+                            // TODO refactor with above
+                            match next {
+                                // let $ident: $ty = scanner.scan().unwrap_or_else(|e| panic!("Error in scanln: expected `$ty`, found `{}`", e));
+                                None => {
+                                    program.push(quote!(let $ident1: Result<$ty1, String> = scanner.scan();));
+                                    // note: easy pretty printing of simple stuff?
+                                    let panic_msg = Token::Literal(Lit::Str_(Symbol::intern(&format!("Error in scanln: expected `{}`, found `{{}}`", ty_str))), None);
+                                    program.push(quote!(let $ident2: $ty2 = $ident3.unwrap_or_else(|e| panic!($panic_msg, e));));
+                                }
+                                // let $ident: $ty = scanner.scan_to($t).unwrap_or_else(|e| panic!("Error in scanln: expected `$ty`, then `$t`, found `{}`", e));
+                                Some(_) => {
+                                    let t = chunks.next().unwrap().expect_text();
+                                    let text = Token::Literal(Lit::Str_(Symbol::intern(&t)), None);
+                                    program.push(quote!(let $ident1: Result<$ty1, String> = scanner.scan_to($text);));
+                                    let panic_msg = Token::Literal(Lit::Str_(Symbol::intern(&format!("Error in scanln: expected value for `{}`, then `{}`, found `{{}}`", ident, t))), None);
+                                    program.push(quote!(let $ident2: $ty2 = $ident3.unwrap_or_else(|e| panic!($panic_msg, e));));
+                                }
+                            }
                         }
                     }
 
@@ -131,6 +162,15 @@ impl ScanLn {
 enum Chunk {
     Text(String),
     Directive(DirKind),
+}
+
+impl Chunk {
+    fn expect_text(self) -> String {
+        match self {
+            Chunk::Text(t) => t,
+            _ => panic!("expected text"),
+        }
+    }
 }
 
 #[derive(Eq, PartialEq, Debug, Clone)]

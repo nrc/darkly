@@ -90,8 +90,11 @@ impl<R: Read> LineReadScanner<R> {
             Ok(n) if n == 0 => self.cur_line = None,
             Err(_) => self.cur_line = None,
             Ok(_) => {
-                assert!(&s[s.len() - 1..] == "\n");
-                self.cur_line = Some(s[..s.len() - 1].to_owned());
+                if &s[s.len() - 1..] == "\n" {
+                    self.cur_line = Some(s[..s.len() - 1].to_owned());
+                } else {
+                    self.cur_line = Some(s.to_owned());                    
+                }
             }
         }
         self.cur_pos = 0;
@@ -186,9 +189,11 @@ impl<R: Read> Scanner for LineReadScanner<R> {
                     *cur_pos += index + s.len();
                 }
                 None => {
-                    let end = min(result.len(), rest.len());
-                    copy_str(rest, result, end);
-                    *cur_pos = line.len();
+                    return Err(rest.to_owned());
+                    // The below code gives the correct behaviour for scan_to_or_end
+                    // let end = min(result.len(), rest.len());
+                    // copy_str(rest, result, end);
+                    // *cur_pos = line.len();
                 }
             }
             Ok(result.len())
@@ -204,6 +209,7 @@ impl<R: Read> Scanner for LineReadScanner<R> {
         result
     }
 
+    // TODO should panic if we run out of text before we hit `next`
     fn scan_to<'a, T: FromStr, P: Pattern<'a>>(&'a mut self, next: P) -> Result<T, String> {
         self.with_cur_line(|line, cur_pos| {
             let rest = &line[*cur_pos..];
@@ -213,8 +219,10 @@ impl<R: Read> Scanner for LineReadScanner<R> {
                     LineReadScanner::<R>::scan_internal(&rest[..i])
                 }
                 None => {
-                    *cur_pos = line.len();
-                    LineReadScanner::<R>::scan_internal(rest)
+                    Err(rest.to_owned())
+                    // The below code gives the correct behaviour for scan_to_or_end
+                    // *cur_pos = line.len();
+                    // LineReadScanner::<R>::scan_internal(rest)
                 }
             }
         })
@@ -234,7 +242,7 @@ fn copy_str(from: &str, to: &mut str, count: usize) {
 
 #[cfg(test)]
 mod test {
-    use super::{str_scanner, Scanner};
+    use super::{scan_str, Scanner};
 
     // TODO to test
     // scan and scan_to with a few non-String types.
@@ -248,7 +256,15 @@ mod test {
     }
 
     #[test]
-    fn test_TODO() {
+    fn test_scan_to_int() {
+        let mut ss = scan_str("Hello: 42!");
+        assert!(ss.scan_to(":").unwrap(): String == "Hello");
+        assert!(ss.next().unwrap() == ' ');
+        assert!(ss.scan_to("!").unwrap(): u32 == 42);
+    }
+
+    #[test]
+    fn test_len() {
         let mut ss = scan_str("Hello, world!");
         assert!(ss.expect("Hello").unwrap() == 5);
         ss.next().unwrap();
