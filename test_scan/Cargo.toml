@@ -4,5 +4,5 @@ version = "0.1.0"
 authors = ["Nick Cameron <ncameron@mozilla.com>"]
 
 [dependencies]
-scan = { path = "../scan" }
-scan_macros = { path = "../scan_macros" }
+darkly-scanner = { path = "../scan" }
+darkly = { path = "../scan_macros" }

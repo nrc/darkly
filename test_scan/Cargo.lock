@@ -2,18 +2,18 @@
 name = "test_scan"
 version = "0.1.0"
 dependencies = [
- "scan 0.1.0",
- "scan_macros 0.1.0",
+ "darkly 0.1.0",
+ "darkly-scanner 0.1.0",
 ]
 
 [[package]]
-name = "scan"
-version = "0.1.0"
-
-[[package]]
-name = "scan_macros"
+name = "darkly"
 version = "0.1.0"
 dependencies = [
- "scan 0.1.0",
+ "darkly-scanner 0.1.0",
 ]
+
+[[package]]
+name = "darkly-scanner"
+version = "0.1.0"
 

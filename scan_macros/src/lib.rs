@@ -61,14 +61,13 @@ impl ScanLn {
         assert!(args.len() == count_holes(&chunks), "Mismatched number of directives and arguments");
 
         // Prelude
-        // `extern crate scan;`
-        // `use scan::{scan_stdin, Scanner};`
+        // `extern crate darkly_scanner;`
+        // `use darkly_scanner::{scan_stdin, Scanner};`
         // `let scanner = scan_stdin();`
 
         // note: this requires the user have scan in their Cargo.toml
-        let extern_crate = quote!(extern crate scan;);
-        // note: should be extend/append, not functional concat
-        let imports = quote!(use scan::{scan_stdin, Scanner};);
+        let extern_crate = quote!(extern crate darkly_scanner;);
+        let imports = quote!(use darkly_scanner::{scan_stdin, Scanner};);
         let decl = quote!(let mut scanner = scan_stdin(););
 
         let mut program = vec![extern_crate, imports, decl];

@@ -7,7 +7,6 @@
 // Can we impl Iterator for Scanner
 
 // TODO
-//   macro
 //   delimited scanning
 //   non-line-broken scanning
 

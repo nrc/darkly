@@ -1,5 +1,5 @@
 [package]
-name = "scan_macros"
+name = "darkly"
 version = "0.1.0"
 authors = ["Nick Cameron <ncameron@mozilla.com>"]
 
@@ -7,4 +7,4 @@ authors = ["Nick Cameron <ncameron@mozilla.com>"]
 plugin = true
 
 [dependencies]
-scan = { path = "../scan" }
+darkly-scanner = { path = "../scan" }
