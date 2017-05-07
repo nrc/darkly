@@ -119,7 +119,7 @@ impl ScanLn {
                             let ident3 = ident1.clone();
                             // note: would be nice for the user not to know about parse_sess, etc, and for this to be easy
                             let ty_str = pprust::ty_to_string(ty);
-                            let ty1 = filemap_to_stream(cx.parse_sess, cx.parse_sess.codemap().new_filemap("<darkly input>".to_owned(), None, ty_str.clone()));
+                            let ty1 = filemap_to_stream(cx.parse_sess, cx.parse_sess.codemap().new_filemap("<darkly input>".to_owned(), ty_str.clone()));
                             let ty2 = ty1.clone();
 
                             // TODO refactor with above
@@ -324,8 +324,6 @@ fn process_args(exprs: &[P<ast::Expr>]) -> Vec<Arg> {
 
 #[cfg(test)]
 mod tests {
-    extern crate scan;
-    use self::scan::*;
     use super::{tokenise_format_str, DirKind, Chunk};
 
     #[test]
