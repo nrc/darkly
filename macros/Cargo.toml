@@ -1,7 +1,12 @@
 [package]
-name = "darkly"
+name = "darkly-macros"
 version = "0.1.0"
 authors = ["Nick Cameron <ncameron@mozilla.com>"]
 
+[lib]
+proc-macro = true
+
 [dependencies]
-darkly-scanner = { path = "../scanner" }
+quote = "0.6.0"
+syn = { version = "0.15.0", features = ["full", "extra-traits"] }
+proc-macro2 = "0.4.21"

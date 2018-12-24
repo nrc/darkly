@@ -1,222 +1,133 @@
-#![feature(specialization)]
-#![feature(type_ascription)]
+#![recursion_limit = "128"]
 
 // TODO
 // if we ever fix specialization, we should be able to avoid the unwraps here
 // (and do it in the scanner?)
 
 extern crate proc_macro;
-extern crate rustc_plugin;
-extern crate syntax;
-extern crate syntax_pos;
+extern crate proc_macro2;
+extern crate quote;
+extern crate syn;
 
-use rustc_plugin::Registry;
-use syntax::ast;
-use syntax::ext::base::{SyntaxExtension, ProcMacro, ExtCtxt};
-use syntax::parse::filemap_to_stream;
-use syntax::parse::common::SeqSep;
-use syntax::parse::token::{self, Token, Lit};
-use syntax::print::pprust;
-use syntax::ptr::P;
-use syntax::symbol::Symbol;
-use syntax::tokenstream::TokenStream;
-use syntax_pos::Span;
 
-#[plugin_registrar]
-pub fn plugin_registrar(reg: &mut Registry) {
-    reg.register_syntax_extension(Symbol::intern("scanln"),
-                                  SyntaxExtension::ProcMacro(Box::new(ScanLn)));
+use proc_macro::TokenStream;
+use proc_macro2::Span;
+use quote::{quote, ToTokens};
+use syn::{Ident, Type, LitStr, Token, punctuated::Punctuated, token::Comma};
+use syn::parse::{self, ParseStream};
+
+
+
+#[proc_macro]
+pub fn scanln(input: TokenStream) -> TokenStream {
+    expand(input).into()
 }
 
-impl ProcMacro for ScanLn {
-    fn expand<'cx>(&self,
-                   ecx: &'cx mut ExtCtxt,
-                   _span: Span,
-                   ts: TokenStream)
-                   -> TokenStream {
-        self.expand(ts, ecx)
+fn expand_expr_form(chunks: Vec<Chunk>) -> proc_macro2::TokenStream {
+    let mut result = quote! {
+        use darkly::Scanner;
+
+        let mut scanner = darkly::scan_stdin();
+    };
+    let mut chunks = chunks.into_iter().peekable();
+    let mut elements = vec![];
+    while let Some(c) = chunks.next() {
+        match c {
+            Chunk::Text(ref s) => {
+                result.extend(text_chunk(s).into_iter());
+            }
+            Chunk::Directive(DirKind::Hole) => {
+                let next_is_text = chunks.peek().and_then(|n| match *n {
+                    Chunk::Text(_) => Some(()),
+                    Chunk::Directive(_) => None,
+                });
+                let next = next_is_text.map(|_| {
+                    chunks.next().unwrap().expect_text()
+                });
+                let name = format!("__scan_var_{}", elements.len());
+                result.extend(expr_expansion(&name, next).into_iter());
+                elements.push(Ident::new(&name, Span::call_site()));
+            }
+            Chunk::Directive(DirKind::DebugHole) => unimplemented!(),
+        }
+    }
+
+    // Put all the components together into a tuple.
+    result.extend(quote! { (#(#elements,)*)}.into_iter());
+
+    quote! { { #result } }
+}
+
+fn expr_expansion(name: &str, next_chunk: Option<String>) -> proc_macro2::TokenStream {
+    // TODO refactor with Arg::expansion
+    match next_chunk {
+        None => {
+            // TODO name is not a helpful identifier
+            let panic_msg = format!("Error in scanln: expected value for `{}`, found `{{}}`", name);
+            let name = Ident::new(name, Span::call_site());
+            quote! {
+                let #name: Result<_, String> = scanner.scan();
+                let #name = #name.unwrap_or_else(|e| panic!(#panic_msg, e));
+            }
+        }
+        Some(t) => {
+            // TODO name is not a helpful identifier
+            let panic_msg = format!("Error in scanln: expected value for `{}`, then `{}`, found `{{}}`", name, t);
+            let name = Ident::new(name, Span::call_site());
+            quote! {
+                let #name: Result<_, String> = scanner.scan_to(#t);
+                let #name = #name.unwrap_or_else(|e| panic!(#panic_msg, e));
+            }
+        }
     }
 }
 
-struct ScanLn;
 
-impl ScanLn {
-    fn expand_expr_form(&self, chunks: Vec<Chunk>) -> TokenStream {
-        let mut program = self.prelude();
+fn text_chunk(s: &str) -> proc_macro2::TokenStream {
+    let panic_msg = format!("Error in scanln: expected `{}`, found `{{}}`", s);
+    quote! {
+        scanner.expect(#s).unwrap_or_else(|e| panic!(#panic_msg, e));
+    }
+}
 
-        let mut elements = vec![];
+fn expand(args: TokenStream) -> proc_macro2::TokenStream {
+    let args: Args = syn::parse(args).expect("Parsing error");
 
-        let mut chunks = chunks.into_iter().peekable();
-        while let Some(c) = chunks.next() {
-            match c {
-                Chunk::Text(ref s) => {
-                    program.push(self.text_chunk(s));
-                }
-                Chunk::Directive(DirKind::Hole) => {
-                    let next = chunks.peek().and_then(|n| match *n {
-                        Chunk::Text(_) => Some(()),
-                        Chunk::Directive(_) => None,
-                    });
+    let chunks = process_lit_str(&args.str);
 
-                    // TODO/note can we use gensym here?
-                    let name = format!("__scan_var_{}", elements.len());
-                    let ident1 = token::Ident(ast::Ident::from_str(&name));
-                    let ident2 = ident1.clone();
-                    let ident3 = ident1.clone();
-                    let ident4 = ident1.clone();
-                    elements.push(quote!($ident4,));
+    if args.args.len() == 0 {
+        return expand_expr_form(chunks);
+    }
 
-                    // TODO refactor with expand?
-                    match next {
-                        // let $ident = scanner.scan().unwrap_or_else(|e| panic!("Error in scanln: expected value for `$ident`, found `{}`", e));
-                        None => {
-                            program.push(quote!(let $ident1: Result<_, String> = scanner.scan();));
-                            // note: should be simpler
-                            let panic_msg = Token::Literal(Lit::Str_(Symbol::intern(&format!("Error in scanln: expected value for `{}`, found `{{}}`", name))), None);
-                            program.push(quote!(let $ident2 = $ident3.unwrap_or_else(|e| panic!($panic_msg, e));));
-                        }
-                        // let $ident = scanner.scan_to($t).unwrap_or_else(|e| panic!("Error in scanln: expected value for `$ident`, then `$t`, found `{}`", e));
-                        Some(_) => {
-                            let t = chunks.next().unwrap().expect_text();
-                            let text = Token::Literal(Lit::Str_(Symbol::intern(&t)), None);
-                            program.push(quote!(let $ident1: Result<_, String> = scanner.scan_to($text);));
-                            let panic_msg = Token::Literal(Lit::Str_(Symbol::intern(&format!("Error in scanln: expected value for `{}`, then `{}`, found `{{}}`", name, t))), None);
-                            program.push(quote!(let $ident2 = $ident3.unwrap_or_else(|e| panic!($panic_msg, e));));
-                        }
-                    }
-                }
-                Chunk::Directive(DirKind::DebugHole) => unimplemented!(),
+    assert!(args.args.len() == count_holes(&chunks), "Mismatched number of directives and arguments");
+
+    let mut result = quote! {
+        use darkly::Scanner;
+
+        let mut scanner = darkly::scan_stdin();
+    };
+    let mut hole_count = 0;
+    let mut chunks = chunks.into_iter().peekable();
+    while let Some(c) = chunks.next() {
+        match c {
+            Chunk::Text(ref s) => {
+                result.extend(text_chunk(s).into_iter());
             }
-        }
-
-        // Put all the components together into a tuple.
-        let elements: TokenStream = elements.into_iter().collect();
-        program.push(quote!(($elements)));
-
-        let program: TokenStream = program.into_iter().collect();
-        quote!({ $program })
-    }
-
-    fn prelude(&self) -> Vec<TokenStream> {
-        // `extern crate darkly_scanner;`
-        // `use darkly_scanner::{scan_stdin, Scanner};`
-        // `let scanner = scan_stdin();`
-
-        // note: this requires the user have scan in their Cargo.toml
-        let extern_crate = quote!(extern crate darkly_scanner;);
-        let imports = quote!(use darkly_scanner::{scan_stdin, Scanner};);
-        let decl = quote!(let mut scanner = scan_stdin(););
-
-        vec![extern_crate, imports, decl]
-    }
-
-    fn text_chunk(&self, s: &str) -> TokenStream {
-        // scanner.expect("$s").unwrap_or_else(|e| panic!("Error in scanln: expected `$s`, found `{}`", e));
-        let expect_msg = Token::Literal(Lit::Str_(Symbol::intern(s)), None);
-        let panic_msg = Token::Literal(Lit::Str_(Symbol::intern(&format!("Error in scanln: expected `{}`, found `{{}}`", s))), None);
-        quote!(scanner.expect($expect_msg).unwrap_or_else(|e| panic!($panic_msg, e));)
-    }
-
-    fn expand(&self, args: TokenStream, cx: &mut ExtCtxt) -> TokenStream {
-        // note: nice parsing API?
-        let mut parser = cx.new_parser_from_tts(&args.trees().collect::<Vec<_>>());
-        let expr_list = parser.parse_seq_to_before_end(&token::Eof,
-                                                       SeqSep::trailing_allowed(token::Comma),
-                                                       |p| Ok(p.parse_expr()?));
-        // note: error reporting
-        assert!(!expr_list.is_empty(), "scanln requires at least a literal string argument");
-
-        let chunks = process_lit_str(&expr_list[0]);
-        let args = process_args(&expr_list[1..]);
-
-        if args.len() == 0 {
-            return self.expand_expr_form(chunks);
-        }
-
-        assert!(args.len() == count_holes(&chunks), "Mismatched number of directives and arguments");
-
-        let mut program = self.prelude();
-
-        let mut hole_count = 0;
-        let mut chunks = chunks.into_iter().peekable();
-        while let Some(c) = chunks.next() {
-            match c {
-                Chunk::Text(ref s) => {
-                    program.push(self.text_chunk(s));
-                }
-                Chunk::Directive(DirKind::Hole) => {
-                    let next = chunks.peek().and_then(|n| match *n {
-                        Chunk::Text(_) => Some(()),
-                        Chunk::Directive(_) => None,
-                    });
-                    match args[hole_count] {
-                        Arg::Ident(ref ident) => {
-                            // note easier way to use idents?
-                            // note get around cloning? - quote! should take by referece
-                            let ident1 = token::Ident(*ident);
-                            let ident2 = ident1.clone();
-                            let ident3 = ident1.clone();
-
-                            match next {
-                                // let $ident = scanner.scan().unwrap_or_else(|e| panic!("Error in scanln: expected value for `$ident`, found `{}`", e));
-                                None => {
-                                    program.push(quote!(let $ident1: Result<_, String> = scanner.scan();));
-                                    // note: should be simpler
-                                    let panic_msg = Token::Literal(Lit::Str_(Symbol::intern(&format!("Error in scanln: expected value for `{}`, found `{{}}`", ident))), None);
-                                    program.push(quote!(let $ident2 = $ident3.unwrap_or_else(|e| panic!($panic_msg, e));));
-                                }
-                                // let $ident = scanner.scan_to($t).unwrap_or_else(|e| panic!("Error in scanln: expected value for `$ident`, then `$t`, found `{}`", e));
-                                Some(_) => {
-                                    let t = chunks.next().unwrap().expect_text();
-                                    let text = Token::Literal(Lit::Str_(Symbol::intern(&t)), None);
-                                    program.push(quote!(let $ident1: Result<_, String> = scanner.scan_to($text);));
-                                    let panic_msg = Token::Literal(Lit::Str_(Symbol::intern(&format!("Error in scanln: expected value for `{}`, then `{}`, found `{{}}`", ident, t))), None);
-                                    program.push(quote!(let $ident2 = $ident3.unwrap_or_else(|e| panic!($panic_msg, e));));
-                                }
-                            }
-                        }
-                        Arg::Typed(ref ident, ref ty) => {
-                            let ident1 = token::Ident(*ident);
-                            let ident2 = ident1.clone();
-                            let ident3 = ident1.clone();
-                            // note: would be nice for the user not to know about parse_sess, etc, and for this to be easy
-                            let ty_str = pprust::ty_to_string(ty);
-                            let ty1 = filemap_to_stream(cx.parse_sess, cx.parse_sess.codemap().new_filemap("<darkly input>".to_owned(), ty_str.clone()));
-                            let ty2 = ty1.clone();
-
-                            // TODO refactor with above
-                            match next {
-                                // let $ident: $ty = scanner.scan().unwrap_or_else(|e| panic!("Error in scanln: expected `$ty`, found `{}`", e));
-                                None => {
-                                    program.push(quote!(let $ident1: Result<$ty1, String> = scanner.scan();));
-                                    // note: easy pretty printing of simple stuff?
-                                    let panic_msg = Token::Literal(Lit::Str_(Symbol::intern(&format!("Error in scanln: expected `{}`, found `{{}}`", ty_str))), None);
-                                    program.push(quote!(let $ident2: $ty2 = $ident3.unwrap_or_else(|e| panic!($panic_msg, e));));
-                                }
-                                // let $ident: $ty = scanner.scan_to($t).unwrap_or_else(|e| panic!("Error in scanln: expected `$ty`, then `$t`, found `{}`", e));
-                                Some(_) => {
-                                    let t = chunks.next().unwrap().expect_text();
-                                    let text = Token::Literal(Lit::Str_(Symbol::intern(&t)), None);
-                                    program.push(quote!(let $ident1: Result<$ty1, String> = scanner.scan_to($text);));
-                                    let panic_msg = Token::Literal(Lit::Str_(Symbol::intern(&format!("Error in scanln: expected value for `{}`, then `{}`, found `{{}}`", ident, t))), None);
-                                    program.push(quote!(let $ident2: $ty2 = $ident3.unwrap_or_else(|e| panic!($panic_msg, e));));
-                                }
-                            }
-                        }
-                    }
-
-                    hole_count += 1;
-                }
-                Chunk::Directive(DirKind::DebugHole) => unimplemented!(),
+            Chunk::Directive(DirKind::Hole) => {
+                let next_is_text = chunks.peek().and_then(|n| match *n {
+                    Chunk::Text(_) => Some(()),
+                    Chunk::Directive(_) => None,
+                });
+                let next = next_is_text.map(|_| {
+                    chunks.next().unwrap().expect_text()
+                });
+                result.extend(args.args[hole_count].expansion(next).into_iter());
+                hole_count += 1;
             }
+            Chunk::Directive(DirKind::DebugHole) => unimplemented!(),
         }
-
-        // TODO think about scoping - can't be in a block because are declaring variables, but don't want the extern crate/use/temp decls to escape
-        // let program: TokenStream = program.into_iter().collect();
-        // quote!({ $program })
-
-        program.into_iter().collect()
     }
+    result
 }
 
 #[derive(Eq, PartialEq, Debug, Clone)]
@@ -243,21 +154,92 @@ enum DirKind {
 }
 
 #[derive(Debug, Clone)]
-enum Arg {
-    Ident(ast::Ident),
-    Typed(ast::Ident, ast::Ty),
+struct Args {
+    str: LitStr,
+    args: Punctuated<Arg, Comma>,
 }
 
-fn process_lit_str(expr: &ast::Expr) -> Vec<Chunk> {
-    if let ast::ExprKind::Lit(ref l) = expr.node {
-        if let ast::LitKind::Str(ref s, ast::StrStyle::Cooked) = l.node {
-            return tokenise_format_str(&s.as_str());
+impl parse::Parse for Args {
+    fn parse(input: ParseStream) -> parse::Result<Args> {
+        let str = input.parse()?;
+        if input.peek(Comma) {
+            input.parse::<Comma>()?;
+        }
+        let args = Punctuated::parse_terminated(input)?;
+
+        Ok(Args {
+            str,
+            args,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Arg {
+    Ident(Ident),
+    Typed(Ident, Type),
+}
+
+impl Arg {
+    fn expansion(&self, next_chunk: Option<String>) -> proc_macro2::TokenStream {
+        match *self {
+            Arg::Ident(ref ident) => {
+                match next_chunk {
+                    None => {
+                        let panic_msg = format!("Error in scanln: expected value for `{}`, found `{{}}`", ident);
+                        quote! {
+                            let #ident: Result<_, String> = scanner.scan();
+                            let #ident = #ident.unwrap_or_else(|e| panic!(#panic_msg, e));
+                        }
+                    }
+                    Some(t) => {
+                        let panic_msg = format!("Error in scanln: expected value for `{}`, then `{}`, found `{{}}`", ident, t);
+                        quote! {
+                            let #ident: Result<_, String> = scanner.scan_to(#t);
+                            let #ident = #ident.unwrap_or_else(|e| panic!(#panic_msg, e));
+                        }
+                    }
+                }
+            }
+            Arg::Typed(ref ident, ref ty) => {
+                match next_chunk {
+                    None => {
+                        let panic_msg = format!("Error in scanln: expected `{}`, found `{{}}`", ty.into_token_stream());
+                        quote! {
+                            let #ident: Result<#ty, String> = scanner.scan();
+                            let #ident: #ty = #ident.unwrap_or_else(|e| panic!(#panic_msg, e));
+                        }
+                    }
+                    Some(t) => {
+                        let panic_msg = format!("Error in scanln: expected `{}`, then `{}`, found `{{}}`", ty.into_token_stream(), t);
+                        quote! {
+                            let #ident: Result<#ty, String> = scanner.scan_to(#t);
+                            let #ident: #ty = #ident.unwrap_or_else(|e| panic!(#panic_msg, e));
+                        }
+                    }
+                }
+            }
         }
     }
+}
 
-    // TODO use pretty printing rather than Debug
-    // Note: error reporting with spans
-    panic!("Expected string literal, found: `{:?}`", expr);
+impl parse::Parse for Arg {
+    fn parse(input: ParseStream) -> parse::Result<Arg> {
+        let ident = input.parse()?;
+        if input.peek(Token![:]) {
+            // A typed argument.
+            input.parse::<Token![:]>()?;
+            let ty = input.parse()?;
+            Ok(Arg::Typed(ident, ty))
+        } else {
+            // An un-typed argument.
+            Ok(Arg::Ident(ident))
+        }
+    }
+}
+
+fn process_lit_str(lit: &LitStr) -> Vec<Chunk> {
+    tokenise_format_str(&lit.value())
 }
 
 fn count_holes(chunks: &[Chunk]) -> usize {
@@ -357,32 +339,6 @@ fn parse_directive(s: String) -> Chunk {
     }
 }
 
-fn process_args(exprs: &[P<ast::Expr>]) -> Vec<Arg> {
-    exprs.iter().map(|e| {
-        match e.node {
-            ast::ExprKind::Path(None, ref p) => {
-                if p.segments.len() != 1 || p.segments[0].parameters.is_some() {
-                    panic!("Expected identifier, found path: {:?}", p);
-                }
-
-                Arg::Ident(p.segments[0].identifier.clone())
-            }
-            ast::ExprKind::Type(ref e, ref t) => {
-                if let ast::ExprKind::Path(None, ref p) = e.node {
-                    if p.segments.len() != 1 || p.segments[0].parameters.is_some() {
-                        panic!("Expected identifier, found path: {:?}", p);
-                    }
-                    Arg::Typed(p.segments[0].identifier.clone(), (**t).clone())
-                } else {
-                    panic!("Expected identifier, found expression: {:?}", e);
-                }
-            }
-            // TODO use pretty printing rather than Debug (and above)
-            // note AST library would need a nice version
-            _ => panic!("Expected identifier or type ascribed identifier, found: `{:?}`", e.node),
-        }
-    }).collect()
-}
 
 #[cfg(test)]
 mod tests {

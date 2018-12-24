@@ -1,6 +1,7 @@
 #![feature(pattern)]
-#![feature(specialization)]
 #![feature(type_ascription)]
+
+extern crate darkly_macros;
 
 // Questions
 // Can we impl Iterator for Scanner
@@ -14,6 +15,8 @@
 // https://docs.oracle.com/javase/7/docs/api/java/util/Scanner.html
 // https://en.wikipedia.org/wiki/Scanf_format_string
 // https://github.com/DanielKeep/rust-scan
+
+pub use darkly_macros::scanln;
 
 use std::cmp::min;
 use std::io::{Read, BufReader, BufRead};

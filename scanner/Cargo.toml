@@ -1,6 +1,10 @@
 [package]
-name = "darkly-scanner"
+name = "darkly"
 version = "0.1.0"
 authors = ["Nick Cameron <ncameron@mozilla.com>"]
 
 [dependencies]
+darkly-macros = { path = "../macros" }
+
+[[example]]
+name = "main"
