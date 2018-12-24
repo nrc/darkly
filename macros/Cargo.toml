@@ -3,8 +3,5 @@ name = "darkly"
 version = "0.1.0"
 authors = ["Nick Cameron <ncameron@mozilla.com>"]
 
-[lib]
-plugin = true
-
 [dependencies]
-darkly-scanner = { path = "../scan" }
+darkly-scanner = { path = "../scanner" }

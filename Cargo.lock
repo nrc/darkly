@@ -1,11 +1,3 @@
-[root]
-name = "test_scan"
-version = "0.1.0"
-dependencies = [
- "darkly 0.1.0",
- "darkly-scanner 0.1.0",
-]
-
 [[package]]
 name = "darkly"
 version = "0.1.0"

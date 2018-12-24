@@ -1,7 +1,6 @@
 #![feature(pattern)]
 #![feature(specialization)]
 #![feature(type_ascription)]
-#![feature(conservative_impl_trait)]
 
 // Questions
 // Can we impl Iterator for Scanner

@@ -1,14 +1,9 @@
 #![feature(specialization)]
 #![feature(type_ascription)]
-#![feature(conservative_impl_trait)]
-#![feature(plugin, plugin_registrar, rustc_private)]
-#![crate_type = "dylib"]
 
 // TODO
 // if we ever fix specialization, we should be able to avoid the unwraps here
 // (and do it in the scanner?)
-
-#![plugin(proc_macro_plugin)]
 
 extern crate proc_macro;
 extern crate rustc_plugin;

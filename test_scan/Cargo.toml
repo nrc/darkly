@@ -1,8 +1,0 @@
-[package]
-name = "test_scan"
-version = "0.1.0"
-authors = ["Nick Cameron <ncameron@mozilla.com>"]
-
-[dependencies]
-darkly-scanner = { path = "../scan" }
-darkly = { path = "../scan_macros" }
