@@ -12,7 +12,7 @@ fn main() {
     // println!("you entered `{}`", x);
     // assert!(x == 42);
 
-    let (x,): (u32,) = scanln!("hello {}foo");
+    let x: u32 = scanln!("hello {}foo");
     println!("you entered `{}`", x);
     assert!(x == 42);
 }

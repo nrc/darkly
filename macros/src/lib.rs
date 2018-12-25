@@ -52,8 +52,13 @@ fn expand_expr_form(chunks: Vec<Chunk>) -> proc_macro2::TokenStream {
         }
     }
 
-    // Put all the components together into a tuple.
-    result.extend(quote! { (#(#elements,)*)}.into_iter());
+    if elements.len() == 1 {
+        let element = &elements[0];
+        result.extend(quote! { #element }.into_iter());
+    } else {
+        // Put all the components together into a tuple.
+        result.extend(quote! { (#(#elements,)*)}.into_iter());
+    }
 
     quote! { { #result } }
 }
