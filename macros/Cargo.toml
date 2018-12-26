@@ -1,7 +1,10 @@
 [package]
 name = "darkly-macros"
 version = "0.1.0"
-authors = ["Nick Cameron <ncameron@mozilla.com>"]
+authors = ["Nick Cameron <nick@ncameron.org>"]
+repository = "https://github.com/nrc/darkly"
+description = "macros to support the Darkly crate"
+license = "Apache-2.0/MIT"
 
 [lib]
 proc-macro = true

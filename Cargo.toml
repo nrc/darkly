@@ -3,3 +3,7 @@ members = [
     "macros",
     "scanner",
 ]
+
+[patch.crates-io]
+darkly-macros = { path = "macros" }
+
