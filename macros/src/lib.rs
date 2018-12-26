@@ -17,10 +17,89 @@ use syn::{Ident, Type, LitStr, Token, punctuated::Punctuated, token::Comma};
 use syn::parse::{self, ParseStream};
 
 
-
 #[proc_macro]
 pub fn scanln(input: TokenStream) -> TokenStream {
-    expand(input).into()
+    expand_one(input).into()
+}
+
+// TODO question should we terminate iteration on a bad match or an empty line?
+#[proc_macro]
+pub fn scanlns(input: TokenStream) -> TokenStream {
+    expand_iterative(input).into()
+}
+
+fn expand_iter_form(chunks: Vec<Chunk>) -> proc_macro2::TokenStream {
+    let mut chunks = chunks.into_iter().peekable();
+    let mut elements = vec![];
+    let mut types = vec![];
+    let mut types_with_bounds = vec![];
+    let mut vars = proc_macro2::TokenStream::new();
+    // TODO we should return None rather than panicking in the chunk handlers
+    while let Some(c) = chunks.next() {
+        match c {
+            Chunk::Text(ref s) => {
+                vars.extend(iter_text_chunk(s).into_iter());
+            }
+            Chunk::Directive(DirKind::Hole) => {
+                let next_is_text = chunks.peek().and_then(|n| match *n {
+                    Chunk::Text(_) => Some(()),
+                    Chunk::Directive(_) => None,
+                });
+                let next = next_is_text.map(|_| {
+                    chunks.next().unwrap().expect_text()
+                });
+                let name = format!("__scan_var_{}", elements.len());
+                let ty = Ident::new(&format!("__ScanTy_{}", elements.len()), Span::call_site());
+                vars.extend(iter_expansion(&name, next).into_iter());
+                types_with_bounds.push(quote! {#ty: std::str::FromStr});
+                types.push(ty);
+                elements.push(Ident::new(&name, Span::call_site()));
+            }
+            Chunk::Directive(DirKind::DebugHole) => unimplemented!(),
+        }
+    }
+
+    let (result, ty) = if elements.len() == 1 {
+        let element = &elements[0];
+        let ty = &types[0];
+        (quote! { #element }, quote! { #ty })
+    } else {
+        // Put all the components together into a tuple.
+        let types = types.clone();
+        (quote! { (#(#elements,)*)}, quote! { (#(#types,)*)})
+    };
+
+    let types_with_bounds2 = types_with_bounds.clone();
+    let types2 = types.clone();
+    let types3 = types.clone();
+    let result = quote! { {
+        fn make_iterator<#(#types_with_bounds,)*>() -> impl Iterator<Item=#ty> {
+            use darkly::Scanner;
+
+            struct ScanIter<#(#types,)* S: Scanner> {
+                scanner: S,
+                pd: ::std::marker::PhantomData<#ty>,
+            }
+
+            impl<#(#types_with_bounds2,)* S: Scanner> Iterator for ScanIter<#(#types2,)* S> {
+                type Item = #ty;
+                fn next(&mut self) -> Option<Self::Item> {
+                    #vars
+                    Some(#result)
+                }
+            }
+
+            let mut iter: ScanIter<#(#types3,)* _> = ScanIter {
+                scanner: darkly::scan_stdin(),
+                pd: ::std::marker::PhantomData,
+            };
+
+            iter
+        }
+        make_iterator()
+    } };
+
+    result
 }
 
 fn expand_expr_form(chunks: Vec<Chunk>) -> proc_macro2::TokenStream {
@@ -63,6 +142,26 @@ fn expand_expr_form(chunks: Vec<Chunk>) -> proc_macro2::TokenStream {
     quote! { { #result } }
 }
 
+fn iter_expansion(name: &str, next_chunk: Option<String>) -> proc_macro2::TokenStream {
+    // TODO refactor with Arg::expansion
+    match next_chunk {
+        None => {
+            let name = Ident::new(name, Span::call_site());
+            quote! {
+                let #name: Result<_, String> = self.scanner.scan();
+                let #name = #name.ok()?;
+            }
+        }
+        Some(t) => {
+            let name = Ident::new(name, Span::call_site());
+            quote! {
+                let #name: Result<_, String> = self.scanner.scan_to(#t);
+                let #name = #name.ok()?;
+            }
+        }
+    }
+}
+
 fn expr_expansion(name: &str, next_chunk: Option<String>) -> proc_macro2::TokenStream {
     // TODO refactor with Arg::expansion
     match next_chunk {
@@ -87,6 +186,11 @@ fn expr_expansion(name: &str, next_chunk: Option<String>) -> proc_macro2::TokenS
     }
 }
 
+fn iter_text_chunk(s: &str) -> proc_macro2::TokenStream {
+    quote! {
+        self.scanner.expect(#s).ok()?;
+    }
+}
 
 fn text_chunk(s: &str) -> proc_macro2::TokenStream {
     let panic_msg = format!("Error in scanln: expected `{}`, found `{{}}`", s);
@@ -95,7 +199,19 @@ fn text_chunk(s: &str) -> proc_macro2::TokenStream {
     }
 }
 
-fn expand(args: TokenStream) -> proc_macro2::TokenStream {
+fn expand_iterative(args: TokenStream) -> proc_macro2::TokenStream {
+   let args: Args = syn::parse(args).expect("Parsing error");
+
+    let chunks = process_lit_str(&args.str);
+
+    if args.args.len() != 0 {
+        panic!("arguments are not supported in iterative mode");
+    }
+
+    expand_iter_form(chunks)
+}
+
+fn expand_one(args: TokenStream) -> proc_macro2::TokenStream {
     let args: Args = syn::parse(args).expect("Parsing error");
 
     let chunks = process_lit_str(&args.str);

@@ -16,7 +16,7 @@ extern crate darkly_macros;
 // https://en.wikipedia.org/wiki/Scanf_format_string
 // https://github.com/DanielKeep/rust-scan
 
-pub use darkly_macros::scanln;
+pub use darkly_macros::{scanln, scanlns};
 
 use std::cmp::min;
 use std::io::{Read, BufReader, BufRead};
@@ -112,7 +112,7 @@ impl<R: Read> LineReadScanner<R> {
             }
 
             self.read_line();
-            if self.cur_line.is_none() {
+            if self.cur_line.is_none() || self.cur_line.as_ref().unwrap().is_empty() {
                 break;
             }
         }
