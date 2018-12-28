@@ -4,7 +4,7 @@ A scanner library and macros.
 
 Example:
 
-```
+``` rust
 fn main() {
     println!("Enter coordinates in the form (x, y)");
     scanln!("({}, {})", x: i32, y);
@@ -52,7 +52,7 @@ ergonomic in simple cases, but not robust. To allow `scanln`'s users to handle
 errors themselves, I plan to implement a non-panicking mode. Whether `scanln`
 panics or not will depend on the type:
 
-```
+``` rust
 scanln!("{}", x: u32); // Panics if can't parse as u32
 scanln!("{}", x: Result<u32, _>); // Returns an Err if can't parse as u32
 ```
