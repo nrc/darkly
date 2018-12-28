@@ -12,6 +12,7 @@ extern crate syn;
 
 use proc_macro::TokenStream;
 use proc_macro2::Span;
+use proc_macro2::TokenStream as TokenStream2;
 use quote::{quote, ToTokens};
 use syn::{Ident, Type, LitStr, Token, punctuated::Punctuated, token::Comma};
 use syn::parse::{self, ParseStream};
@@ -19,43 +20,74 @@ use syn::parse::{self, ParseStream};
 
 #[proc_macro]
 pub fn scanln(input: TokenStream) -> TokenStream {
-    expand_one(input).into()
+    let args: StdinArgs = syn::parse(input).expect("Parsing error");
+    expand_one(quote! { darkly::scan_stdin() }, args).into()
 }
 
 // TODO question should we terminate iteration on a bad match or an empty line?
 #[proc_macro]
 pub fn scanlns(input: TokenStream) -> TokenStream {
-    expand_iterative(input).into()
+    let args: StdinArgs = syn::parse(input).expect("Parsing error");
+    expand_iterative(quote! { darkly::scan_stdin() }, args).into()
 }
 
-fn expand_iter_form(chunks: Vec<Chunk>) -> proc_macro2::TokenStream {
+#[proc_macro]
+pub fn sscanln(input: TokenStream) -> TokenStream {
+    let args: StrArgs = syn::parse(input).expect("Parsing error");
+    let (s, args) = args.into();
+    expand_one(quote! { darkly::scan_str(#s) }, args).into()
+}
+
+// TODO question should we terminate iteration on a bad match or an empty line?
+#[proc_macro]
+pub fn sscanlns(input: TokenStream) -> TokenStream {
+    let args: StrArgs = syn::parse(input).expect("Parsing error");
+    let (s, args) = args.into();
+    expand_iterative(quote! { darkly::scan_str(#s) }, args).into()
+}
+
+#[proc_macro]
+pub fn fscanln(input: TokenStream) -> TokenStream {
+    let args: StrArgs = syn::parse(input).expect("Parsing error");
+    let (s, args) = args.into();
+    expand_one(quote! { darkly::scan_file_from_path(#s) }, args).into()
+}
+
+// TODO question should we terminate iteration on a bad match or an empty line?
+#[proc_macro]
+pub fn fscanlns(input: TokenStream) -> TokenStream {
+    let args: StrArgs = syn::parse(input).expect("Parsing error");
+    let (s, args) = args.into();
+    expand_iterative(quote! { darkly::scan_file_from_path(#s) }, args).into()
+}
+
+
+fn expand_iter_form(init: TokenStream2, chunks: Vec<Chunk>) -> TokenStream2 {
     let mut chunks = chunks.into_iter().peekable();
     let mut elements = vec![];
     let mut types = vec![];
     let mut types_with_bounds = vec![];
-    let mut vars = proc_macro2::TokenStream::new();
+    let mut vars = TokenStream2::new();
     // TODO we should return None rather than panicking in the chunk handlers
     while let Some(c) = chunks.next() {
         match c {
             Chunk::Text(ref s) => {
                 vars.extend(iter_text_chunk(s).into_iter());
             }
+            Chunk::Whitespace => {
+                vars.extend(iter_ws_chunk().into_iter());
+            }
             Chunk::Directive(DirKind::Hole) => {
-                let next_is_text = chunks.peek().and_then(|n| match *n {
-                    Chunk::Text(_) => Some(()),
-                    Chunk::Directive(_) => None,
-                });
-                let next = next_is_text.map(|_| {
-                    chunks.next().unwrap().expect_text()
-                });
+                let next_chunk = chunks.peek().unwrap_or(EOF);
                 let name = format!("__scan_var_{}", elements.len());
                 let ty = Ident::new(&format!("__ScanTy_{}", elements.len()), Span::call_site());
-                vars.extend(iter_expansion(&name, next).into_iter());
+                vars.extend(iter_expansion(&name, next_chunk).into_iter());
                 types_with_bounds.push(quote! {#ty: std::str::FromStr});
                 types.push(ty);
                 elements.push(Ident::new(&name, Span::call_site()));
             }
             Chunk::Directive(DirKind::DebugHole) => unimplemented!(),
+            Chunk::Eof => break,
         }
     }
 
@@ -90,7 +122,7 @@ fn expand_iter_form(chunks: Vec<Chunk>) -> proc_macro2::TokenStream {
             }
 
             let mut iter: ScanIter<#(#types3,)* _> = ScanIter {
-                scanner: darkly::scan_stdin(),
+                scanner: #init,
                 pd: ::std::marker::PhantomData,
             };
 
@@ -102,7 +134,7 @@ fn expand_iter_form(chunks: Vec<Chunk>) -> proc_macro2::TokenStream {
     result
 }
 
-fn expand_expr_form(chunks: Vec<Chunk>) -> proc_macro2::TokenStream {
+fn expand_expr_form(chunks: Vec<Chunk>) -> TokenStream2 {
     let mut result = quote! {
         use darkly::Scanner;
 
@@ -115,19 +147,17 @@ fn expand_expr_form(chunks: Vec<Chunk>) -> proc_macro2::TokenStream {
             Chunk::Text(ref s) => {
                 result.extend(text_chunk(s).into_iter());
             }
+            Chunk::Whitespace => {
+                result.extend(ws_chunk().into_iter());
+            }
             Chunk::Directive(DirKind::Hole) => {
-                let next_is_text = chunks.peek().and_then(|n| match *n {
-                    Chunk::Text(_) => Some(()),
-                    Chunk::Directive(_) => None,
-                });
-                let next = next_is_text.map(|_| {
-                    chunks.next().unwrap().expect_text()
-                });
+                let next_chunk = chunks.peek().unwrap_or(EOF);
                 let name = format!("__scan_var_{}", elements.len());
-                result.extend(expr_expansion(&name, next).into_iter());
+                result.extend(expr_expansion(&name, next_chunk).into_iter());
                 elements.push(Ident::new(&name, Span::call_site()));
             }
             Chunk::Directive(DirKind::DebugHole) => unimplemented!(),
+            Chunk::Eof => break,
         }
     }
 
@@ -142,90 +172,112 @@ fn expand_expr_form(chunks: Vec<Chunk>) -> proc_macro2::TokenStream {
     quote! { { #result } }
 }
 
-fn iter_expansion(name: &str, next_chunk: Option<String>) -> proc_macro2::TokenStream {
+fn iter_expansion(name: &str, next_chunk: &Chunk) -> TokenStream2 {
+    let name = Ident::new(name, Span::call_site());
     // TODO refactor with Arg::expansion
     match next_chunk {
-        None => {
-            let name = Ident::new(name, Span::call_site());
+        Chunk::Directive(_) | Chunk::Eof => {
             quote! {
                 let #name: Result<_, String> = self.scanner.scan();
                 let #name = #name.ok()?;
             }
         }
-        Some(t) => {
-            let name = Ident::new(name, Span::call_site());
+        Chunk::Text(t) => {
             quote! {
                 let #name: Result<_, String> = self.scanner.scan_to(#t);
+                let #name = #name.ok()?;
+            }
+        }
+        Chunk::Whitespace => {
+            quote! {
+                let #name: Result<_, String> = self.scanner.scan_to_whitespace();
                 let #name = #name.ok()?;
             }
         }
     }
 }
 
-fn expr_expansion(name: &str, next_chunk: Option<String>) -> proc_macro2::TokenStream {
+fn expr_expansion(name: &str, next_chunk: &Chunk) -> TokenStream2 {
+    let name = Ident::new(name, Span::call_site());
     // TODO refactor with Arg::expansion
     match next_chunk {
-        None => {
+        Chunk::Directive(_) | Chunk::Eof => {
             // TODO name is not a helpful identifier
             let panic_msg = format!("Error in scanln: expected value for `{}`, found `{{}}`", name);
-            let name = Ident::new(name, Span::call_site());
             quote! {
                 let #name: Result<_, String> = scanner.scan();
                 let #name = #name.unwrap_or_else(|e| panic!(#panic_msg, e));
             }
         }
-        Some(t) => {
+        Chunk::Text(t) => {
             // TODO name is not a helpful identifier
             let panic_msg = format!("Error in scanln: expected value for `{}`, then `{}`, found `{{}}`", name, t);
-            let name = Ident::new(name, Span::call_site());
             quote! {
                 let #name: Result<_, String> = scanner.scan_to(#t);
+                let #name = #name.unwrap_or_else(|e| panic!(#panic_msg, e));
+            }
+        }
+        Chunk::Whitespace => {
+            // TODO name is not a helpful identifier
+            let panic_msg = format!("Error in scanln: expected value for `{}`, then ` `, found `{{}}`", name);
+            quote! {
+                let #name: Result<_, String> = scanner.scan_to_whitespace();
                 let #name = #name.unwrap_or_else(|e| panic!(#panic_msg, e));
             }
         }
     }
 }
 
-fn iter_text_chunk(s: &str) -> proc_macro2::TokenStream {
+fn iter_text_chunk(s: &str) -> TokenStream2 {
     quote! {
         self.scanner.expect(#s).ok()?;
     }
 }
 
-fn text_chunk(s: &str) -> proc_macro2::TokenStream {
+// TODO macro name in panic message
+fn text_chunk(s: &str) -> TokenStream2 {
     let panic_msg = format!("Error in scanln: expected `{}`, found `{{}}`", s);
     quote! {
         scanner.expect(#s).unwrap_or_else(|e| panic!(#panic_msg, e));
     }
 }
 
-fn expand_iterative(args: TokenStream) -> proc_macro2::TokenStream {
-   let args: Args = syn::parse(args).expect("Parsing error");
+fn ws_chunk() -> TokenStream2 {
+    quote! {
+        scanner.expect_whitespace().unwrap_or_else(|e| panic!("Error in scanln: expected whitespace, found `{}`", e));
+    }
+}
 
+fn iter_ws_chunk() -> TokenStream2 {
+    quote! {
+        self.scanner.expect_whitespace().unwrap_or_else(|e| panic!("Error in scanln: expected whitespace, found `{}`", e));
+    }
+}
+
+fn expand_iterative(init: TokenStream2, args: StdinArgs) -> TokenStream2 {
     let chunks = process_lit_str(&args.str);
 
     if args.args.len() != 0 {
         panic!("arguments are not supported in iterative mode");
     }
 
-    expand_iter_form(chunks)
+    expand_iter_form(init, chunks)
 }
 
-fn expand_one(args: TokenStream) -> proc_macro2::TokenStream {
-    let args: Args = syn::parse(args).expect("Parsing error");
-
+fn expand_one(init: TokenStream2, args: StdinArgs) -> TokenStream2 {
     let chunks = process_lit_str(&args.str);
 
     if args.args.len() == 0 {
         return expand_expr_form(chunks);
     }
 
-    assert!(args.args.len() == count_holes(&chunks), "Mismatched number of directives and arguments");
+    assert!(args.args.len() == count_directives(&chunks), "Mismatched number of directives and arguments");
 
+    // TODO scoping of new vars vs priv names
     let mut result = quote! {
         use darkly::Scanner;
 
-        let mut scanner = darkly::scan_stdin();
+        let mut scanner = #init;
     };
     let mut hole_count = 0;
     let mut chunks = chunks.into_iter().peekable();
@@ -234,18 +286,16 @@ fn expand_one(args: TokenStream) -> proc_macro2::TokenStream {
             Chunk::Text(ref s) => {
                 result.extend(text_chunk(s).into_iter());
             }
+            Chunk::Whitespace => {
+                result.extend(ws_chunk().into_iter());
+            }
             Chunk::Directive(DirKind::Hole) => {
-                let next_is_text = chunks.peek().and_then(|n| match *n {
-                    Chunk::Text(_) => Some(()),
-                    Chunk::Directive(_) => None,
-                });
-                let next = next_is_text.map(|_| {
-                    chunks.next().unwrap().expect_text()
-                });
-                result.extend(args.args[hole_count].expansion(next).into_iter());
+                let next_chunk = chunks.peek().unwrap_or(EOF);
+                result.extend(args.args[hole_count].expansion(next_chunk).into_iter());
                 hole_count += 1;
             }
             Chunk::Directive(DirKind::DebugHole) => unimplemented!(),
+            Chunk::Eof => break,
         }
     }
     result
@@ -254,17 +304,12 @@ fn expand_one(args: TokenStream) -> proc_macro2::TokenStream {
 #[derive(Eq, PartialEq, Debug, Clone)]
 enum Chunk {
     Text(String),
+    Whitespace,
     Directive(DirKind),
+    Eof,
 }
 
-impl Chunk {
-    fn expect_text(self) -> String {
-        match self {
-            Chunk::Text(t) => t,
-            _ => panic!("expected text"),
-        }
-    }
-}
+static EOF: &Chunk = &Chunk::Eof;
 
 #[derive(Eq, PartialEq, Debug, Clone)]
 enum DirKind {
@@ -275,23 +320,60 @@ enum DirKind {
 }
 
 #[derive(Debug, Clone)]
-struct Args {
+struct StdinArgs {
     str: LitStr,
     args: Punctuated<Arg, Comma>,
 }
 
-impl parse::Parse for Args {
-    fn parse(input: ParseStream) -> parse::Result<Args> {
+#[derive(Debug, Clone)]
+struct StrArgs {
+    input: LitStr,
+    str: LitStr,
+    args: Punctuated<Arg, Comma>,
+}
+
+impl parse::Parse for StdinArgs {
+    fn parse(input: ParseStream) -> parse::Result<StdinArgs> {
         let str = input.parse()?;
         if input.peek(Comma) {
             input.parse::<Comma>()?;
         }
         let args = Punctuated::parse_terminated(input)?;
 
-        Ok(Args {
+        Ok(StdinArgs {
             str,
             args,
         })
+    }
+}
+
+impl parse::Parse for StrArgs {
+    fn parse(input: ParseStream) -> parse::Result<StrArgs> {
+        let input_str = input.parse()?;
+        input.parse::<Comma>()?;
+        let str = input.parse()?;
+        if input.peek(Comma) {
+            input.parse::<Comma>()?;
+        }
+        let args = Punctuated::parse_terminated(input)?;
+
+        Ok(StrArgs {
+            input: input_str,
+            str,
+            args,
+        })
+    }
+}
+
+impl Into<(String, StdinArgs)> for StrArgs {
+    fn into(self) -> (String, StdinArgs) {
+        (
+            self.input.value(),
+            StdinArgs {
+                str: self.str,
+                args: self.args,
+            },
+        )
     }
 }
 
@@ -302,21 +384,28 @@ enum Arg {
 }
 
 impl Arg {
-    fn expansion(&self, next_chunk: Option<String>) -> proc_macro2::TokenStream {
+    fn expansion(&self, next_chunk: &Chunk) -> TokenStream2 {
         match *self {
             Arg::Ident(ref ident) => {
                 match next_chunk {
-                    None => {
+                    Chunk::Directive(_) | Chunk::Eof => {
                         let panic_msg = format!("Error in scanln: expected value for `{}`, found `{{}}`", ident);
                         quote! {
                             let #ident: Result<_, String> = scanner.scan();
                             let #ident = #ident.unwrap_or_else(|e| panic!(#panic_msg, e));
                         }
                     }
-                    Some(t) => {
+                    Chunk::Text(t) => {
                         let panic_msg = format!("Error in scanln: expected value for `{}`, then `{}`, found `{{}}`", ident, t);
                         quote! {
                             let #ident: Result<_, String> = scanner.scan_to(#t);
+                            let #ident = #ident.unwrap_or_else(|e| panic!(#panic_msg, e));
+                        }
+                    }
+                    Chunk::Whitespace => {
+                        let panic_msg = format!("Error in scanln: expected value for `{}`, then ` `, found `{{}}`", ident);
+                        quote! {
+                            let #ident: Result<_, String> = scanner.scan_to_whitespace();
                             let #ident = #ident.unwrap_or_else(|e| panic!(#panic_msg, e));
                         }
                     }
@@ -324,17 +413,24 @@ impl Arg {
             }
             Arg::Typed(ref ident, ref ty) => {
                 match next_chunk {
-                    None => {
+                    Chunk::Directive(_) | Chunk::Eof => {
                         let panic_msg = format!("Error in scanln: expected `{}`, found `{{}}`", ty.into_token_stream());
                         quote! {
                             let #ident: Result<#ty, String> = scanner.scan();
                             let #ident: #ty = #ident.unwrap_or_else(|e| panic!(#panic_msg, e));
                         }
                     }
-                    Some(t) => {
+                    Chunk::Text(t) => {
                         let panic_msg = format!("Error in scanln: expected `{}`, then `{}`, found `{{}}`", ty.into_token_stream(), t);
                         quote! {
                             let #ident: Result<#ty, String> = scanner.scan_to(#t);
+                            let #ident: #ty = #ident.unwrap_or_else(|e| panic!(#panic_msg, e));
+                        }
+                    }
+                    Chunk::Whitespace => {
+                        let panic_msg = format!("Error in scanln: expected `{}`, then ` `, found `{{}}`", ty.into_token_stream());
+                        quote! {
+                            let #ident: Result<#ty, String> = scanner.scan_to_whitespace();
                             let #ident: #ty = #ident.unwrap_or_else(|e| panic!(#panic_msg, e));
                         }
                     }
@@ -363,7 +459,7 @@ fn process_lit_str(lit: &LitStr) -> Vec<Chunk> {
     tokenise_format_str(&lit.value())
 }
 
-fn count_holes(chunks: &[Chunk]) -> usize {
+fn count_directives(chunks: &[Chunk]) -> usize {
     chunks.iter().filter(|c| if let &Chunk::Directive(_) = *c { true } else { false }).count()
 
 }
@@ -377,6 +473,7 @@ fn tokenise_format_str(s: &str) -> Vec<Chunk> {
         OpenBrace,
         CloseBrace,
         Hole,
+        Whitespace,
     }
 
     let mut state = State::Text;
@@ -394,6 +491,7 @@ fn tokenise_format_str(s: &str) -> Vec<Chunk> {
                     State::OpenBrace => panic!("Unclosed directive"),
                     State::CloseBrace => result.push(parse_directive(buf)),
                     State::Hole => panic!("Unclosed directive"),
+                    State::Whitespace => {}
                 }
                 return result;
             }
@@ -434,11 +532,24 @@ fn tokenise_format_str(s: &str) -> Vec<Chunk> {
                         buf = String::new();
                         state = State::Text;
                     }
-                    (State::Text, '{') => {
+                    (State::Text, '{') | (State::Whitespace, '{') => {
                         state = State::OpenBrace;
                     }
-                    (State::Text, '}') => {
+                    (State::Text, '}') | (State::Whitespace, '}') => {
                         state = State::CloseBrace;
+                    }
+                    (State::Text, ' ') | (State::Text, '\t') => {
+                        if !buf.is_empty() {
+                            result.push(Chunk::Text(buf));
+                            buf = String::new();
+                        }
+                        result.push(Chunk::Whitespace);
+                        state = State::Whitespace;
+                    }
+                    (State::Whitespace, ' ') | (State::Whitespace, '\t') => {}
+                    (State::Whitespace, c) => {
+                        buf.push(c);
+                        state = State::Text;
                     }
                     (State::Text, c) | (State::Hole, c) => {
                         buf.push(c);
@@ -474,7 +585,8 @@ mod tests {
             assert_eq!(c, e);
         }
 
-        let expected = [Chunk::Text("Hello, ".to_owned()),
+        let expected = [Chunk::Text("Hello,".to_owned()),
+                        Chunk::Whitespace,
                         Chunk::Directive(DirKind::Hole),
                         Chunk::Text("!".to_owned()),
                         Chunk::Directive(DirKind::DebugHole)];
@@ -487,7 +599,9 @@ mod tests {
             assert_eq!(c, e);
         }
 
-        let expected = [Chunk::Text("Hello, {}".to_owned()),
+        let expected = [Chunk::Text("Hello,".to_owned()),
+                        Chunk::Whitespace,
+                        Chunk::Text("{}".to_owned()),
                         Chunk::Directive(DirKind::DebugHole),
                         Chunk::Text("{".to_owned()),
                         Chunk::Directive(DirKind::Hole),
@@ -495,20 +609,15 @@ mod tests {
         for (c, e) in tokenise_format_str("Hello, {{}}{:?}{{{}}}!").iter().zip(expected.iter()) {
             assert_eq!(c, e);
         }
+
+        let expected = [Chunk::Text("Hello".to_owned()),
+            Chunk::Whitespace,
+            Chunk::Directive(DirKind::Hole),
+            Chunk::Whitespace,];
+        let toks = tokenise_format_str("Hello {} ");
+        assert_eq!(toks.len(), expected.len());
+        for (c, e) in toks.iter().zip(expected.iter()) {
+            assert_eq!(c, e);
+        }
     }
-
-    // #[test]
-    // TODO
-    // fn it_works() {
-    //     // let mut ss = scan_stdin();
-    //     // println!("You typed: `{}`", ss.scan().unwrap(): String);
-    //     // println!("You typed: `{}`", ss.scan_to(",").unwrap(): String);
-
-    //     // scanln!("Hello, {}!", s);
-    //     let mut ss = scan_stdin();
-    //     ss.expect("Hello, ").unwrap();
-    //     let s = ss.scan_to("!").unwrap();
-    //     println!("Good bye, {}!", s: String);
-    //     panic!();
-    // }
 }

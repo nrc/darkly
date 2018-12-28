@@ -17,13 +17,17 @@ fn main() {
     // println!("you entered `{}`", x);
     // assert!(x == 42);
 
-    for x in scanlns!("hello {}foo") {
-        println!("you entered `{}`", x: u32);
-    }
-    println!("done");
+    // for x in scanlns!("hello {}foo") {
+    //     println!("you entered `{}`", x: u32);
+    // }
+    // println!("done");
 
     // for (x, y) in scanlns!("{}, {}") {
     //     println!("you entered `{}, {}`", x: u32, y:i32);
     // }
     // println!("done");
+
+    // position=<-51031,  41143> velocity=< 5, -4>
+    scanln!("position=< {}, {}> velocity=< {}, {}>", a, b, c, d);
+    println!("{} {} {} {}", a: i32, b: i32, c: i32, d: i32);
 }

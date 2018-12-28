@@ -1,6 +1,6 @@
 [package]
 name = "darkly-macros"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Nick Cameron <nick@ncameron.org>"]
 repository = "https://github.com/nrc/darkly"
 description = "macros to support the Darkly crate"

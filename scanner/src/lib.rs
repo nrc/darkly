@@ -1,5 +1,6 @@
 #![feature(pattern)]
 #![feature(type_ascription)]
+#![feature(proc_macro_hygiene)]
 
 extern crate darkly_macros;
 
@@ -16,18 +17,21 @@ extern crate darkly_macros;
 // https://en.wikipedia.org/wiki/Scanf_format_string
 // https://github.com/DanielKeep/rust-scan
 
-pub use darkly_macros::{scanln, scanlns};
+pub use darkly_macros::{scanln, scanlns, sscanln, sscanlns, fscanln, fscanlns};
 
 use std::cmp::min;
 use std::io::{Read, BufReader, BufRead};
 use std::str::pattern::Pattern;
 use std::str::FromStr;
 
+use crate as darkly;
+
 // TODO Serde
 pub trait Deserialize {}
 
 pub trait Scanner {
     fn expect<'a, P: Pattern<'a>>(&'a mut self, p: P) -> Result<usize, String>;
+    fn expect_whitespace<'a>(&'a mut self) -> Result<usize, String>;
 
     fn has_next(&mut self) -> bool;
     // Err case is always empty string
@@ -38,12 +42,15 @@ pub trait Scanner {
     // underlying the Scanner.
     fn scan_str(&mut self, result: &mut str) -> Result<usize, String>;
     fn scan_str_to<'a, P: Pattern<'a>>(&'a mut self, result: &mut str, next: P) -> Result<usize, String>;
+    fn scan_str_to_whitespace<'a>(&'a mut self, result: &mut str) -> Result<usize, String>;
 
     fn scan<T: FromStr>(&mut self) -> Result<T, String>;
     fn scan_to<'a, T: FromStr, P: Pattern<'a>>(&'a mut self, next: P) -> Result<T, String>;
+    fn scan_to_whitespace<'a, T: FromStr>(&'a mut self) -> Result<T, String>;
 
     fn scan_de<T: Deserialize>(&mut self) -> Result<T, String> { unimplemented!(); }
     fn scan_de_to<'a, T: Deserialize, P: Pattern<'a>>(&'a mut self, _next: P) -> Result<T, String> { unimplemented!(); }
+    fn scan_de_to_whitespace<'a, T: Deserialize>(&'a mut self) -> Result<T, String> { unimplemented!(); }
 }
 
 pub fn scan_str<'a>(input: &'a str) -> impl Scanner + 'a {
@@ -147,6 +154,25 @@ impl<R: Read> Scanner for LineReadScanner<R> {
         })
     }
 
+    fn expect_whitespace<'a>(&'a mut self) -> Result<usize, String> {
+        self.with_cur_line(|line, cur_pos| {
+            let mut count = 0;
+            loop {
+                let rest = &line[*cur_pos..];
+                if let Some(c) = rest.chars().next() {
+                    if c.is_whitespace() && c != '\n' {
+                        let width = c.len_utf8();
+                        *cur_pos += width;
+                        count += width;
+                        continue;
+                    }
+                }
+                break;
+            }
+            Ok(count)
+        }).or(Ok(0))
+    }
+
     fn has_next(&mut self) -> bool {
         self.advance_line();
         self.cur_line.is_some()
@@ -201,6 +227,10 @@ impl<R: Read> Scanner for LineReadScanner<R> {
         })        
     }
 
+    fn scan_str_to_whitespace<'a>(&'a mut self, _result: &mut str) -> Result<usize, String> {
+        unimplemented!();
+    }
+
     fn scan<T: FromStr>(&mut self) -> Result<T, String> {
         let result = self.with_cur_line(|line, cur_pos| {
             let rest = &line[*cur_pos..];
@@ -216,7 +246,7 @@ impl<R: Read> Scanner for LineReadScanner<R> {
             let rest = &line[*cur_pos..];
             match rest.match_indices(next).next() {
                 Some((i, s)) => {
-                    *cur_pos += i + s.len();
+                    *cur_pos += i + s.len() - 1;
                     LineReadScanner::<R>::scan_internal(&rest[..i])
                 }
                 None => {
@@ -227,6 +257,24 @@ impl<R: Read> Scanner for LineReadScanner<R> {
                 }
             }
         })
+    }
+
+    fn scan_to_whitespace<'a, T: FromStr>(&'a mut self) -> Result<T, String> {
+        let result = self.with_cur_line(|line, cur_pos| {
+            let rest = &line[*cur_pos..];
+            match rest.match_indices(|c: char| c.is_whitespace() && c != '\n').next() {
+                Some((i, s)) => {
+                    *cur_pos += i + s.len();
+                    LineReadScanner::<R>::scan_internal(&rest[..i])
+                }
+                None => {
+                    *cur_pos = line.len();
+                    LineReadScanner::<R>::scan_internal(rest)
+                }
+            }
+        })?;
+        self.expect_whitespace()?;
+        Ok(result)
     }
 }
 
@@ -243,15 +291,13 @@ fn copy_str(from: &str, to: &mut str, count: usize) {
 
 #[cfg(test)]
 mod test {
-    use super::{scan_str, Scanner};
-
-    // TODO to test
-    // scan and scan_to with a few non-String types.
+    use super::*;
 
     #[test]
     fn test_scan() {
         let mut ss = scan_str("Hello, world!");
         assert!(ss.scan_to(",").unwrap(): String == "Hello");
+        assert!(ss.next().unwrap() == ',');
         assert!(ss.next().unwrap() == ' ');
         assert!(ss.scan().unwrap(): String == "world!");
     }
@@ -260,8 +306,18 @@ mod test {
     fn test_scan_to_int() {
         let mut ss = scan_str("Hello: 42!");
         assert!(ss.scan_to(":").unwrap(): String == "Hello");
+        assert!(ss.next().unwrap() == ':');
         assert!(ss.next().unwrap() == ' ');
         assert!(ss.scan_to("!").unwrap(): u32 == 42);
+    }
+
+    #[test]
+    fn test_scan_to_ws() {
+        let mut ss = scan_str("Hello  42!0");
+        assert!(ss.scan_to_whitespace().unwrap(): String == "Hello");
+        assert!(ss.scan_to("!").unwrap(): u32 == 42);
+        assert!(ss.next().unwrap() == '!');
+        assert!(ss.scan_to_whitespace().unwrap(): i32 == 0);
     }
 
     #[test]
@@ -298,5 +354,45 @@ mod test {
         ss.expect(',').unwrap();
         ss.expect(' ').unwrap();
         assert!(ss.next() == Ok('w'));
+    }
+
+    #[test]
+    fn test_expect_ws() {
+        let mut ss = scan_str("   Hello, world!");
+
+        assert_eq!(ss.expect_whitespace().unwrap(), 3);
+        ss.expect("Hello").unwrap();
+        ss.expect(',').unwrap();
+        assert_eq!(ss.expect_whitespace().unwrap(), 1);
+        assert!(ss.next() == Ok('w'));
+        assert_eq!(ss.expect_whitespace().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_macro_ws() {
+        {sscanln!("hello 42", "hello {} ", x: u32);
+        assert_eq!(x, 42);}
+        {sscanln!("hello   42", "hello {} ", x: u32);
+        assert_eq!(x, 42);}
+        {sscanln!("hello42", "hello {} ", x: u32);
+        assert_eq!(x, 42);}
+        {sscanln!("hello   42     ", "hello {} ", x: u32);
+        assert_eq!(x, 42);}
+        {sscanln!("42 hello", " {} hello", x: u32);
+        assert_eq!(x, 42);}
+        {sscanln!("42   hello", " {} hello", x: u32);
+        assert_eq!(x, 42);}
+        // FIXME() robust parsing
+        // we should know that the `hello` chunk is coming up and pass it to expect ws, so it can accept zero ws
+        // {sscanln!("42hello", " {} hello", x: u32);
+        // assert_eq!(x, 42);}
+        {sscanln!("   42  hello", " {} hello", x: u32);
+        assert_eq!(x, 42);}
+    }
+
+    #[test]
+    fn test_macro_smoke() {
+        sscanln!("position=<-51031,  41143>", "position=< {}, {}>", a, b);
+        println!("{} {}", a: i32, b: i32);
     }
 }
