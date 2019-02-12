@@ -1,5 +1,4 @@
 #![feature(pattern)]
-#![feature(type_ascription)]
 #![feature(proc_macro_hygiene)]
 
 extern crate darkly_macros;
@@ -18,13 +17,13 @@ extern crate darkly_macros;
 // https://github.com/DanielKeep/rust-scan
 
 pub use darkly_macros::{scanln, scanlns, sscanln, sscanlns, fscanln, fscanlns};
+pub use crate as darkly;
 
 use std::cmp::min;
 use std::io::{Read, BufReader, BufRead};
 use std::str::pattern::Pattern;
 use std::str::FromStr;
 
-use crate as darkly;
 
 // TODO Serde
 pub trait Deserialize {}
@@ -296,28 +295,28 @@ mod test {
     #[test]
     fn test_scan() {
         let mut ss = scan_str("Hello, world!");
-        assert!(ss.scan_to(",").unwrap(): String == "Hello");
+        assert!(ss.scan_to::<String, _>(",").unwrap() == "Hello");
         assert!(ss.next().unwrap() == ',');
         assert!(ss.next().unwrap() == ' ');
-        assert!(ss.scan().unwrap(): String == "world!");
+        assert!(ss.scan::<String>().unwrap() == "world!");
     }
 
     #[test]
     fn test_scan_to_int() {
         let mut ss = scan_str("Hello: 42!");
-        assert!(ss.scan_to(":").unwrap(): String == "Hello");
+        assert!(ss.scan_to::<String, _>(":").unwrap() == "Hello");
         assert!(ss.next().unwrap() == ':');
         assert!(ss.next().unwrap() == ' ');
-        assert!(ss.scan_to("!").unwrap(): u32 == 42);
+        assert!(ss.scan_to::<u32, _>("!").unwrap() == 42);
     }
 
     #[test]
     fn test_scan_to_ws() {
         let mut ss = scan_str("Hello  42!0");
-        assert!(ss.scan_to_whitespace().unwrap(): String == "Hello");
-        assert!(ss.scan_to("!").unwrap(): u32 == 42);
+        assert!(ss.scan_to_whitespace::<String>().unwrap() == "Hello");
+        assert!(ss.scan_to::<u32, _>("!").unwrap() == 42);
         assert!(ss.next().unwrap() == '!');
-        assert!(ss.scan_to_whitespace().unwrap(): i32 == 0);
+        assert!(ss.scan_to_whitespace::<i32>().unwrap() == 0);
     }
 
     #[test]
@@ -392,7 +391,7 @@ mod test {
 
     #[test]
     fn test_macro_smoke() {
-        sscanln!("position=<-51031,  41143>", "position=< {}, {}>", a, b);
-        println!("{} {}", a: i32, b: i32);
+        sscanln!("position=<-51031,  41143>", "position=< {}, {}>", a: i32, b: i32);
+        println!("{} {}", a, b);
     }
 }
