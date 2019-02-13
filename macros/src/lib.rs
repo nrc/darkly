@@ -6,6 +6,7 @@
 
 extern crate proc_macro;
 extern crate proc_macro2;
+extern crate proc_macro_hack;
 extern crate quote;
 extern crate syn;
 
@@ -13,25 +14,26 @@ extern crate syn;
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use proc_macro2::TokenStream as TokenStream2;
+use proc_macro_hack::proc_macro_hack;
 use quote::{quote, ToTokens};
 use syn::{Ident, Type, LitStr, Token, punctuated::Punctuated, token::Comma};
 use syn::parse::{self, ParseStream};
 
 
-#[proc_macro]
+#[proc_macro_hack]
 pub fn scanln(input: TokenStream) -> TokenStream {
     let args: StdinArgs = syn::parse(input).expect("Parsing error");
     expand_one(quote! { darkly::scan_stdin() }, args).into()
 }
 
 // TODO question should we terminate iteration on a bad match or an empty line?
-#[proc_macro]
+#[proc_macro_hack]
 pub fn scanlns(input: TokenStream) -> TokenStream {
     let args: StdinArgs = syn::parse(input).expect("Parsing error");
     expand_iterative(quote! { darkly::scan_stdin() }, args).into()
 }
 
-#[proc_macro]
+#[proc_macro_hack]
 pub fn sscanln(input: TokenStream) -> TokenStream {
     let args: StrArgs = syn::parse(input).expect("Parsing error");
     let (s, args) = args.into();
@@ -39,14 +41,14 @@ pub fn sscanln(input: TokenStream) -> TokenStream {
 }
 
 // TODO question should we terminate iteration on a bad match or an empty line?
-#[proc_macro]
+#[proc_macro_hack]
 pub fn sscanlns(input: TokenStream) -> TokenStream {
     let args: StrArgs = syn::parse(input).expect("Parsing error");
     let (s, args) = args.into();
     expand_iterative(quote! { darkly::scan_str(#s) }, args).into()
 }
 
-#[proc_macro]
+#[proc_macro_hack]
 pub fn fscanln(input: TokenStream) -> TokenStream {
     let args: StrArgs = syn::parse(input).expect("Parsing error");
     let (s, args) = args.into();
@@ -54,7 +56,7 @@ pub fn fscanln(input: TokenStream) -> TokenStream {
 }
 
 // TODO question should we terminate iteration on a bad match or an empty line?
-#[proc_macro]
+#[proc_macro_hack]
 pub fn fscanlns(input: TokenStream) -> TokenStream {
     let args: StrArgs = syn::parse(input).expect("Parsing error");
     let (s, args) = args.into();

@@ -2,6 +2,7 @@
 #![feature(proc_macro_hygiene)]
 
 extern crate darkly_macros;
+extern crate proc_macro_hack;
 
 // Questions
 // Can we impl Iterator for Scanner
@@ -16,6 +17,7 @@ extern crate darkly_macros;
 // https://en.wikipedia.org/wiki/Scanf_format_string
 // https://github.com/DanielKeep/rust-scan
 
+#[proc_macro_hack::proc_macro_hack]
 pub use darkly_macros::{scanln, scanlns, sscanln, sscanlns, fscanln, fscanlns};
 pub use crate as darkly;
 
