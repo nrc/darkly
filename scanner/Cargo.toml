@@ -9,6 +9,3 @@ license = "Apache-2.0/MIT"
 [dependencies]
 darkly-macros = "0.2.0"
 proc-macro-hack = "0.5"
-
-[[example]]
-name = "main"
