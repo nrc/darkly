@@ -106,14 +106,12 @@ fn expand_iter_form(init: TokenStream2, chunks: Vec<Chunk>) -> TokenStream2 {
     let types3 = types.clone();
     let result = quote! { {
         fn make_iterator<#(#types_with_bounds,)*>() -> impl Iterator<Item=#ty> {
-            use darkly::Scanner;
-
-            struct ScanIter<#(#types,)* S: Scanner> {
+            struct ScanIter<#(#types,)* S: darkly::Scanner> {
                 scanner: S,
                 pd: ::std::marker::PhantomData<#ty>,
             }
 
-            impl<#(#types_with_bounds2,)* S: Scanner> Iterator for ScanIter<#(#types2,)* S> {
+            impl<#(#types_with_bounds2,)* S: darkly::Scanner> Iterator for ScanIter<#(#types2,)* S> {
                 type Item = #ty;
                 fn next(&mut self) -> Option<Self::Item> {
                     #vars
@@ -136,8 +134,6 @@ fn expand_iter_form(init: TokenStream2, chunks: Vec<Chunk>) -> TokenStream2 {
 
 fn expand_expr_form(chunks: Vec<Chunk>) -> TokenStream2 {
     let mut result = quote! {
-        use darkly::Scanner;
-
         let mut scanner = darkly::scan_stdin();
     };
     let mut chunks = chunks.into_iter().peekable();
@@ -238,19 +234,19 @@ fn iter_text_chunk(s: &str) -> TokenStream2 {
 fn text_chunk(s: &str) -> TokenStream2 {
     let panic_msg = format!("Error in scanln: expected `{}`, found `{{}}`", s);
     quote! {
-        scanner.expect(#s).unwrap_or_else(|e| panic!(#panic_msg, e));
+        darkly::Scanner::expect(&mut scanner, #s).unwrap_or_else(|e| panic!(#panic_msg, e));
     }
 }
 
 fn ws_chunk() -> TokenStream2 {
     quote! {
-        scanner.expect_whitespace().unwrap_or_else(|e| panic!("Error in scanln: expected whitespace, found `{}`", e));
+        darkly::Scanner::expect_whitespace(&mut scanner).unwrap_or_else(|e| panic!("Error in scanln: expected whitespace, found `{}`", e));
     }
 }
 
 fn iter_ws_chunk() -> TokenStream2 {
     quote! {
-        self.scanner.expect_whitespace().unwrap_or_else(|e| panic!("Error in scanln: expected whitespace, found `{}`", e));
+        darkly::Scanner::expect_whitespace(&mut self.scanner).unwrap_or_else(|e| panic!("Error in scanln: expected whitespace, found `{}`", e));
     }
 }
 
@@ -275,8 +271,6 @@ fn expand_one(init: TokenStream2, args: StdinArgs) -> TokenStream2 {
 
     // TODO scoping of new vars vs priv names
     let mut result = quote! {
-        use darkly::Scanner;
-
         let mut scanner = #init;
     };
     let mut hole_count = 0;
@@ -391,21 +385,21 @@ impl Arg {
                     Chunk::Directive(_) | Chunk::Eof => {
                         let panic_msg = format!("Error in scanln: expected value for `{}`, found `{{}}`", ident);
                         quote! {
-                            let #ident: Result<_, String> = scanner.scan();
+                            let #ident: Result<_, String> = darkly::Scanner::scan(&mut scanner);
                             let #ident = #ident.unwrap_or_else(|e| panic!(#panic_msg, e));
                         }
                     }
                     Chunk::Text(t) => {
                         let panic_msg = format!("Error in scanln: expected value for `{}`, then `{}`, found `{{}}`", ident, t);
                         quote! {
-                            let #ident: Result<_, String> = scanner.scan_to(#t);
+                            let #ident: Result<_, String> = darkly::Scanner::scan_to(&mut scanner, #t);
                             let #ident = #ident.unwrap_or_else(|e| panic!(#panic_msg, e));
                         }
                     }
                     Chunk::Whitespace => {
                         let panic_msg = format!("Error in scanln: expected value for `{}`, then ` `, found `{{}}`", ident);
                         quote! {
-                            let #ident: Result<_, String> = scanner.scan_to_whitespace();
+                            let #ident: Result<_, String> = darkly::Scanner::scan_to_whitespace(&mut scanner);
                             let #ident = #ident.unwrap_or_else(|e| panic!(#panic_msg, e));
                         }
                     }
@@ -416,21 +410,21 @@ impl Arg {
                     Chunk::Directive(_) | Chunk::Eof => {
                         let panic_msg = format!("Error in scanln: expected `{}`, found `{{}}`", ty.into_token_stream());
                         quote! {
-                            let #ident: Result<#ty, String> = scanner.scan();
+                            let #ident: Result<#ty, String> = darkly::Scanner::scan(&mut scanner);
                             let #ident: #ty = #ident.unwrap_or_else(|e| panic!(#panic_msg, e));
                         }
                     }
                     Chunk::Text(t) => {
                         let panic_msg = format!("Error in scanln: expected `{}`, then `{}`, found `{{}}`", ty.into_token_stream(), t);
                         quote! {
-                            let #ident: Result<#ty, String> = scanner.scan_to(#t);
+                            let #ident: Result<#ty, String> = darkly::Scanner::scan_to(&mut scanner, #t);
                             let #ident: #ty = #ident.unwrap_or_else(|e| panic!(#panic_msg, e));
                         }
                     }
                     Chunk::Whitespace => {
                         let panic_msg = format!("Error in scanln: expected `{}`, then ` `, found `{{}}`", ty.into_token_stream());
                         quote! {
-                            let #ident: Result<#ty, String> = scanner.scan_to_whitespace();
+                            let #ident: Result<#ty, String> = darkly::Scanner::scan_to_whitespace(&mut scanner);
                             let #ident: #ty = #ident.unwrap_or_else(|e| panic!(#panic_msg, e));
                         }
                     }

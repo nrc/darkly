@@ -17,7 +17,6 @@ extern crate darkly_macros;
 // https://github.com/DanielKeep/rust-scan
 
 pub use darkly_macros::{scanln, scanlns, sscanln, sscanlns, fscanln, fscanlns};
-pub use crate as darkly;
 
 use std::cmp::min;
 use std::io::{Read, BufReader, BufRead};
@@ -298,6 +297,7 @@ fn copy_str(from: &str, to: &mut str, count: usize) {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate as darkly;
 
     #[test]
     fn test_scan() {
