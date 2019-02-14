@@ -5,6 +5,7 @@ authors = ["Nick Cameron <nick@ncameron.org>"]
 repository = "https://github.com/nrc/darkly"
 description = "macros to support the Darkly crate"
 license = "Apache-2.0/MIT"
+edition = "2018"
 
 [lib]
 proc-macro = true

@@ -1,7 +1,7 @@
 #![feature(proc_macro_hygiene)]
 #![feature(type_ascription)]
 
-extern crate darkly;
+use darkly;
 
 use darkly::{scanln, scanlns};
 

@@ -5,9 +5,9 @@
 // (and do it in the scanner?)
 
 extern crate proc_macro;
-extern crate proc_macro2;
-extern crate quote;
-extern crate syn;
+
+
+use syn;
 
 
 use proc_macro::TokenStream;
@@ -327,7 +327,7 @@ struct StrArgs {
 }
 
 impl parse::Parse for StdinArgs {
-    fn parse(input: ParseStream) -> parse::Result<StdinArgs> {
+    fn parse(input: ParseStream<'_>) -> parse::Result<StdinArgs> {
         let str = input.parse()?;
         if input.peek(Comma) {
             input.parse::<Comma>()?;
@@ -342,7 +342,7 @@ impl parse::Parse for StdinArgs {
 }
 
 impl parse::Parse for StrArgs {
-    fn parse(input: ParseStream) -> parse::Result<StrArgs> {
+    fn parse(input: ParseStream<'_>) -> parse::Result<StrArgs> {
         let input_str = input.parse()?;
         input.parse::<Comma>()?;
         let str = input.parse()?;
@@ -435,7 +435,7 @@ impl Arg {
 }
 
 impl parse::Parse for Arg {
-    fn parse(input: ParseStream) -> parse::Result<Arg> {
+    fn parse(input: ParseStream<'_>) -> parse::Result<Arg> {
         let ident = input.parse()?;
         if input.peek(Token![:]) {
             // A typed argument.

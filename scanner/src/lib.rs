@@ -1,7 +1,7 @@
 // #![feature(pattern)]
 #![feature(proc_macro_hygiene)]
 
-extern crate darkly_macros;
+
 
 // Questions
 // Can we impl Iterator for Scanner
